@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var stateNames = []string{"unlocked", "locked", "root", "child", "grandchild"}
+var stateNames = []string{"locked", "unlocked", "root", "child", "grandchild"}
 var triggerNames = []string{"unlock", "lock"}
 
 const (
@@ -463,12 +463,13 @@ func TestMachine_Fire(t *testing.T) {
 	require := require.New(t)
 
 	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, data](2, 2)
-	spec.Transition().From(unlocked).On(lock).To(locked)
-	spec.Transition().From(locked).On(unlock).To(unlocked)
+	specBuilder := NewSpecBuilder[state, trigger, data](2, 2)
+	specBuilder.Transition().From(unlocked).On(lock).To(locked)
+	specBuilder.Transition().From(locked).On(unlock).To(unlocked)
+	spec := specBuilder.Build()
 
 	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), unlocked)
+	fsm := New(spec, unlocked)
 
 	// Assert the initial state of the FSM.
 	require.Equal(unlocked, fsm.State(), "Expected initial state to be unlocked")
@@ -623,15 +624,15 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 	callOrder := make([]string, 0, 10)
 
 	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, data](5, 2)
-	spec.Transition().From(grandchild).On(lock).To(locked).WithAction(func(ctx context.Context, opts data) error {
+	specBuilder := NewSpecBuilder[state, trigger, data](5, 2)
+	specBuilder.Transition().From(grandchild).On(lock).To(locked).WithAction(func(ctx context.Context, opts data) error {
 		actionCalled = true
 		callOrder = append(callOrder, "action")
 		return nil
 	})
 
 	// Configure state hierarchy.
-	spec.State(root).
+	specBuilder.State(root).
 		OnEntry(func(ctx context.Context, opts data) error {
 			rootOnEntryCalled = true
 			callOrder = append(callOrder, "rootOnEntry")
@@ -642,7 +643,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			callOrder = append(callOrder, "rootOnExit")
 			return nil
 		})
-	spec.State(grandchild).
+	specBuilder.State(grandchild).
 		Parent(child).
 		OnEntry(func(ctx context.Context, opts data) error {
 			grandchildOnEntryCalled = true
@@ -654,7 +655,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			callOrder = append(callOrder, "grandchildOnExit")
 			return nil
 		})
-	spec.State(child).
+	specBuilder.State(child).
 		Parent(root).
 		OnEntry(func(ctx context.Context, opts data) error {
 			lcaOnEntryCalled = true
@@ -666,7 +667,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			callOrder = append(callOrder, "lcaOnExit")
 			return nil
 		})
-	spec.State(locked).
+	specBuilder.State(locked).
 		Parent(child).
 		OnEntry(func(ctx context.Context, opts data) error {
 			lockedOnEntryCalled = true
@@ -680,7 +681,8 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 		})
 
 	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), grandchild)
+	spec := specBuilder.Build()
+	fsm := New(spec, grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
 	err := fsm.Fire(t.Context(), lock, data{})
@@ -710,6 +712,91 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 	require.Equal(locked, fsm.State(), "Expected FSM to be in locked state")
 }
 
+func TestSpec_MermaidDiagram(t *testing.T) {
+	require := require.New(t)
+
+	// Create a new FSM specification with multiple states and transitions
+	specBuilder := NewSpecBuilder[state, trigger, data](5, 2)
+	specBuilder.Transition().From(unlocked).On(lock).To(locked)
+	specBuilder.Transition().From(locked).On(unlock).To(unlocked)
+	specBuilder.Transition().From(root).On(lock).To(child)
+	specBuilder.Transition().From(child).On(unlock).To(grandchild)
+	specBuilder.Transition().From(grandchild).On(lock).To(root)
+
+	// Configure state hierarchy
+	specBuilder.State(grandchild).Parent(child)
+	specBuilder.State(child).Parent(root)
+
+	spec := specBuilder.Build()
+
+	diagram := spec.MermaidJSDiagram()
+
+	// Expected lines in the diagram
+	expectedLines := []string{
+		"stateDiagram-v2",
+		"unlocked --> locked : lock",
+		"locked --> unlocked : unlock",
+		"root --> child : lock",
+		"child --> grandchild : unlock",
+		"grandchild --> root : lock",
+	}
+
+	for _, line := range expectedLines {
+		require.Contains(diagram, line, "Diagram missing expected line: %q", line)
+	}
+
+	// Check that all transitions are present and formatted correctly
+	lines := make(map[string]bool)
+	for _, line := range expectedLines {
+		lines[line] = false
+	}
+	diagramLines := splitLines(diagram)
+	for _, line := range diagramLines {
+		if _, ok := lines[line]; ok {
+			lines[line] = true
+		}
+	}
+	for line, found := range lines {
+		require.True(found, "Expected line not found: %q", line)
+	}
+
+	// Check that there are no unexpected transitions
+	for _, line := range diagramLines {
+		if line == "stateDiagram-v2" {
+			continue
+		}
+		found := false
+		for _, expected := range expectedLines[1:] {
+			if line == expected {
+				found = true
+				break
+			}
+		}
+		require.True(found, "Unexpected transition in diagram: %q", line)
+	}
+
+	// Check that hierarchical states are handled (no duplicate or missing transitions)
+	// (This is implicit in the above checks, but can be extended for more complex hierarchies)
+}
+
+// splitLines splits a string into lines, trimming whitespace.
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			if i > start {
+				out = append(out, s[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
 func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
@@ -727,15 +814,15 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 	callOrder := make([]string, 0, 10)
 
 	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, data](5, 2)
-	spec.Transition().From(grandchild).On(lock).To(root).WithAction(func(ctx context.Context, opts data) error {
+	specBuilder := NewSpecBuilder[state, trigger, data](5, 2)
+	specBuilder.Transition().From(grandchild).On(lock).To(root).WithAction(func(ctx context.Context, opts data) error {
 		actionCalled = true
 		callOrder = append(callOrder, "action")
 		return nil
 	})
 
 	// Configure state hierarchy.
-	spec.State(root).
+	specBuilder.State(root).
 		Initial(locked).
 		OnEntry(func(ctx context.Context, opts data) error {
 			rootOnEntryCalled = true
@@ -747,7 +834,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			callOrder = append(callOrder, "rootOnExit")
 			return nil
 		})
-	spec.State(grandchild).
+	specBuilder.State(grandchild).
 		Parent(child).
 		OnEntry(func(ctx context.Context, opts data) error {
 			grandchildOnEntryCalled = true
@@ -759,7 +846,8 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			callOrder = append(callOrder, "grandchildOnExit")
 			return nil
 		})
-	spec.State(child).
+
+	specBuilder.State(child).
 		Parent(root).
 		OnEntry(func(ctx context.Context, opts data) error {
 			childOnEntryCalled = true
@@ -771,7 +859,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			callOrder = append(callOrder, "childOnExit")
 			return nil
 		})
-	spec.State(locked).
+	specBuilder.State(locked).
 		Parent(root).
 		OnEntry(func(ctx context.Context, opts data) error {
 			lockedOnEntryCalled = true
@@ -784,8 +872,11 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			return nil
 		})
 
+	// Build the FSM specification.
+	spec := specBuilder.Build()
+
 	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), grandchild)
+	fsm := New(spec, grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
 	err := fsm.Fire(t.Context(), lock, data{})

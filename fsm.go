@@ -306,6 +306,24 @@ type Spec[S, T ~uint, D any] struct {
 	initialStates []*S
 }
 
+// MermaidJSDiagram returns a state diagram in Mermaid.js syntax for the FSM Spec.
+func (spec *Spec[S, T, D]) MermaidJSDiagram() string {
+	diagram := "stateDiagram-v2\n"
+	for from := uint(0); from < spec.stateCount; from++ {
+		for trigger := uint(0); trigger < spec.triggerCount; trigger++ {
+			idx := transitionIndex(S(from), T(trigger), spec.triggerCount)
+			trans := spec.transitions[idx]
+			if trans.Valid {
+				fromStr := fmt.Sprintf("%v", S(from))
+				toStr := fmt.Sprintf("%v", trans.Next)
+				triggerStr := fmt.Sprintf("%v", T(trigger))
+				diagram += fromStr + " --> " + toStr + " : " + triggerStr + "\n"
+			}
+		}
+	}
+	return diagram
+}
+
 // Machine is a finite state machine (FSM) instance. It keeps track of its current state and uses the FSM specification
 // to determine valid state transitions and is the executor of defined transition actions and state hooks.
 type Machine[S, T ~uint, D any] struct {
