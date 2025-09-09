@@ -90,11 +90,11 @@ func TestHierarchicalStates(t *testing.T) {
 		From(GrandchildA).
 		On(ChangeFocus).
 		To(GrandchildB).
-		WithAction(func(ctx context.Context, data data) error {
+		WithAction("printTransition()", func(ctx context.Context, data data) error {
 			fmt.Println("Transitioning from GrandchildA to GrandchildB")
 			return nil
 		}).
-		WithGuard(func(ctx context.Context, data data) error {
+		WithGuard("no-op", func(data data) error {
 			fmt.Println("Guarding transition from GrandchildA to GrandchildB")
 			return nil
 		})

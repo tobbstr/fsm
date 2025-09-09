@@ -29,6 +29,7 @@ A lightweight, idiomatic, and extensible Finite State Machine (FSM) library for 
     ok      github.com/tobbstr/fsm  1.424s
     ```
 - **Type-safe by design** — powered by Go generics for maximum flexibility
+- [**Automatic documentation** — generate Mermaid.js diagrams with ease](./fsm_test.go#715)
 - **Reliable** — backed by comprehensive tests using Go’s standard tools
 - **MIT licensed** — free for both open-source and commercial use
 

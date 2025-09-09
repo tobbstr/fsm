@@ -44,22 +44,25 @@ import (
 const maxDepth = 10 // Needed constraint to allow zero-allocation fsm.Fire(...) runs.
 
 var (
-	ErrNotFound = fmt.Errorf("not found")
+	ErrNotFound           = fmt.Errorf("not found")
+	ErrTransitionRejected = fmt.Errorf("transition rejected")
 )
 
 type (
 	// Guard is a function that checks whether a transition is allowed to occur.
-	Guard[D any] func(ctx context.Context, data D) error
+	Guard[D any] func(data D) error
 	// Action is a function that performs an action when a transition occurs.
 	Action[D any] func(ctx context.Context, data D) error
 )
 
 // Transition represents a state transition in the FSM.
 type Transition[S ~uint, D any] struct {
-	Valid  bool
-	Next   S
-	Guard  Guard[D]
-	Action Action[D]
+	Valid             bool
+	Next              S
+	Guard             Guard[D]
+	GuardDescription  string
+	Action            Action[D]
+	ActionDescription string
 }
 
 // StateHooks represents hooks that can be triggered on state entry and exit.
@@ -208,34 +211,66 @@ func (tb *transitionOnBuilder[S, T, D]) To(state S) *transitionToBuilder[S, T, D
 }
 
 type transitionToBuilder[S, T ~uint, D any] struct {
-	b       *specBuilder[S, T, D]
-	from    S
-	trigger T
-	to      S
-	guard   Guard[D]
-	action  Action[D]
+	b                 *specBuilder[S, T, D]
+	from              S
+	trigger           T
+	to                S
+	guard             Guard[D]
+	guardDescription  string
+	action            Action[D]
+	actionDescription string
 }
 
-// WithGuard sets the guard for the transition.
-func (tb *transitionToBuilder[S, T, D]) WithGuard(guard Guard[D]) *transitionToBuilder[S, T, D] {
+// WithGuard sets a guard function and its description for the transition.
+//
+// The guard is a predicate that determines whether the transition is allowed to occur.
+// If the guard returns an error, the transition is blocked and the error is propagated.
+//
+// The desc parameter should provide a concise, human-readable explanation of the guard's purpose or logic.
+// This description is used for documentation and visualization purposes, such as generating Mermaid.js diagrams,
+// to make the FSM's specification easily understandable.
+//
+// Example desc values:
+//
+//	"balance >= amount"
+//	"isUserAuthenticated"
+//	"canWithdraw"
+func (tb *transitionToBuilder[S, T, D]) WithGuard(desc string, guard Guard[D]) *transitionToBuilder[S, T, D] {
 	tb.guard = guard
+	tb.guardDescription = desc
 	return tb
 }
 
-// WithAction sets the action for the transition. It is called when a transition is taking place from one state
-// to another.
-func (tb *transitionToBuilder[S, T, D]) WithAction(action Action[D]) *transitionToBuilder[S, T, D] {
+// WithAction sets an action function and its description for the transition.
+//
+// The action is executed when the transition occurs, allowing you to perform side effects such as updating state,
+// calling external services, or emitting events. If the action returns an error, the transition is aborted and the
+// error is propagated.
+//
+// The desc parameter should be a concise, human-readable description of what the action does. This is useful for
+// documentation and visualization purposes, such as generating Mermaid.js diagrams, to make the FSM's specification
+// easily understandable.
+//
+// Example desc values:
+//
+//	"deduct balance"
+//	"send notification"
+//	"logTransition()"
+func (tb *transitionToBuilder[S, T, D]) WithAction(desc string, action Action[D]) *transitionToBuilder[S, T, D] {
 	tb.action = action
+	tb.actionDescription = desc
 	return tb
 }
 
 func (tb *transitionToBuilder[S, T, D]) done() *specBuilder[S, T, D] {
 	idx := transitionIndex(tb.from, tb.trigger, tb.b.triggerCount)
 	tb.b.transitions[idx] = Transition[S, D]{
-		Valid:  true,
-		Next:   tb.to,
-		Guard:  tb.guard,
-		Action: tb.action,
+		Valid:             true,
+		Next:              tb.to,
+		Guard:             tb.guard,
+		GuardDescription:  tb.guardDescription,
+		Action:            tb.action,
+		ActionDescription: tb.actionDescription,
 	}
 
 	return tb.b
@@ -317,7 +352,15 @@ func (spec *Spec[S, T, D]) MermaidJSDiagram() string {
 				fromStr := fmt.Sprintf("%v", S(from))
 				toStr := fmt.Sprintf("%v", trans.Next)
 				triggerStr := fmt.Sprintf("%v", T(trigger))
-				diagram += fromStr + " --> " + toStr + " : " + triggerStr + "\n"
+				guardDesc := ""
+				if trans.GuardDescription != "" {
+					guardDesc = " [" + trans.GuardDescription + "]"
+				}
+				actionDesc := ""
+				if trans.ActionDescription != "" {
+					actionDesc = " / " + trans.ActionDescription
+				}
+				diagram += fromStr + " --> " + toStr + " : " + triggerStr + guardDesc + actionDesc + "\n"
 			}
 		}
 	}
@@ -340,48 +383,52 @@ func New[S, T ~uint, D any](spec *Spec[S, T, D], initialState S) *Machine[S, T, 
 }
 
 // State returns the current state of the FSM.
-func (f *Machine[S, T, D]) State() S {
-	return f.state
+func (m *Machine[S, T, D]) State() S {
+	return m.state
 }
 
 // ActiveHierarchy returns the active hierarchy of states in the FSM.
-func (f *Machine[S, T, D]) ActiveHierarchy() []S {
+func (m *Machine[S, T, D]) ActiveHierarchy() []S {
 	var hierarchy [maxDepth]S
-	i := f.readHierarchy(f.state, &hierarchy)
+	i := m.readHierarchy(m.state, &hierarchy)
 	out := hierarchy[:i]
 	return out
 }
 
 // IsIn checks if the FSM is currently in the specified state.
-func (f *Machine[S, T, D]) IsIn(state S) bool {
+func (m *Machine[S, T, D]) IsIn(state S) bool {
 	var hierarchy [maxDepth]S
-	i := f.readHierarchy(f.state, &hierarchy)
+	i := m.readHierarchy(m.state, &hierarchy)
 	return slices.Contains(hierarchy[:i], state)
 }
 
-// Fire attempts to perform a state transition based on the provided trigger, options and current state.
+// Fire attempts to perform a state transition based on the provided trigger, data and current state.
+//
 // If a defined transition cannot be found for the current state, it will search up the state hierarchy for
 // a valid transition until one is found. If none is found, it will return an ErrNotFound error.
-func (f *Machine[S, T, D]) Fire(ctx context.Context, trigger T, opts D) error {
-	state := f.state
+//
+// If a transition is found but has a guard that rejects the transition, it will return an ErrTransitionRejected error.
+func (m *Machine[S, T, D]) Fire(ctx context.Context, trigger T, data D) error {
+	state := m.state
 	var transition Transition[S, D]
 	for {
-		trans, err := f.findTransition(trigger, state)
+		trans, err := m.findTransition(trigger, state)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				parent := f.spec.stateParents[state]
+				parent := m.spec.stateParents[state]
 				if parent != nil {
 					state = *parent // Move up the hierarchy and try to find a transition from the parent state.
 					continue
 				}
 			}
-			return fmt.Errorf("finding transition for trigger (%v) and current state (%v): %w", trigger, f.state, err)
+			return fmt.Errorf("finding transition for trigger (%v) and current state (%v): %w", trigger, m.state, err)
 		}
 
 		// Return an error if the guard rejects the transition.
 		if guard := trans.Guard; guard != nil {
-			if err := guard(ctx, opts); err != nil {
-				return fmt.Errorf("guard rejected transition: %w", err)
+			if err := guard(data); err != nil {
+				err = fmt.Errorf("rejecting transition from state (%v) to (%v) for trigger (%v): %w", state, trans.Next, trigger, err)
+				return errors.Join(ErrTransitionRejected, err)
 			}
 		}
 
@@ -399,9 +446,9 @@ func (f *Machine[S, T, D]) Fire(ctx context.Context, trigger T, opts D) error {
 	var lcaTargetStatesIdx *int
 	var sourceStatesArr [maxDepth]S // Using a constant array to avoid allocations.
 	var targetStatesArr [maxDepth]S
-	i := f.readHierarchy(f.state, &sourceStatesArr)
+	i := m.readHierarchy(m.state, &sourceStatesArr)
 	sourceStates := sourceStatesArr[:i]
-	i = f.readHierarchy(transition.Next, &targetStatesArr)
+	i = m.readHierarchy(transition.Next, &targetStatesArr)
 	targetStates := targetStatesArr[:i]
 outerLoop:
 	for i := 1; i < len(sourceStates); i++ {
@@ -421,8 +468,8 @@ outerLoop:
 			break
 		}
 		// Invoke the state's OnExit hook if it exists.
-		if onExit := f.spec.stateHooks[state].OnExit; onExit != nil {
-			if err := onExit(ctx, opts); err != nil {
+		if onExit := m.spec.stateHooks[state].OnExit; onExit != nil {
+			if err := onExit(ctx, data); err != nil {
 				return fmt.Errorf("invoking OnExit state hook for state %v: %w", state, err)
 			}
 		}
@@ -430,7 +477,7 @@ outerLoop:
 
 	// Return an error if the transition's action fails.
 	if action := transition.Action; action != nil {
-		if err := action(ctx, opts); err != nil {
+		if err := action(ctx, data); err != nil {
 			return fmt.Errorf("invoking transition action from states (%v) to (%v): %w", state, transition.Next, err)
 		}
 	}
@@ -451,69 +498,76 @@ outerLoop:
 			continue
 		}
 		// Invoke the state's OnEntry hook if it exists.
-		if onEntry := f.spec.stateHooks[state].OnEntry; onEntry != nil {
-			if err := onEntry(ctx, opts); err != nil {
+		if onEntry := m.spec.stateHooks[state].OnEntry; onEntry != nil {
+			if err := onEntry(ctx, data); err != nil {
 				return fmt.Errorf("invoking OnEntry state hook for state (%v): %w", state, err)
 			}
 		}
 	}
 
 	// If configured, set the FSM's current state to the defined initial sub-state and run its OnEntry hook.
-	intialSubstate := f.spec.initialStates[transition.Next]
+	intialSubstate := m.spec.initialStates[transition.Next]
 	if intialSubstate != nil {
 		// Invoke the state's OnEntry hook if it exists.
-		if onEntry := f.spec.stateHooks[*intialSubstate].OnEntry; onEntry != nil {
-			if err := onEntry(ctx, opts); err != nil {
+		if onEntry := m.spec.stateHooks[*intialSubstate].OnEntry; onEntry != nil {
+			if err := onEntry(ctx, data); err != nil {
 				return fmt.Errorf("invoking OnEntry state hook for state (%v): %w", *intialSubstate, err)
 			}
 		}
-		f.state = *intialSubstate
+		m.state = *intialSubstate
 		return nil
 	}
 
 	// Update the current state.
-	f.state = transition.Next
+	m.state = transition.Next
 	return nil
 }
 
 // CanFire checks if a state transition can be made given the trigger, current state and the guard defined
-// for the transition.
-func (f *Machine[S, T, D]) CanFire(ctx context.Context, trigger T, opts D) bool {
-	trans, err := f.findTransition(trigger, f.state)
-	if err != nil {
-		return false
-	}
-
-	// Return false if the transition is not defined.
-	if !trans.Valid {
-		return false
-	}
-
-	// Return false if the guard rejects the transition.
-	if guard := trans.Guard; guard != nil {
-		if err := guard(ctx, opts); err != nil {
+// for the transition. It returns true if the transition can be made, otherwise false.
+//
+// It will search up the state hierarchy for a valid transition until one is found or the root is reached.
+func (m *Machine[S, T, D]) CanFire(ctx context.Context, trigger T, data D) bool {
+	state := m.state
+	for {
+		trans, err := m.findTransition(trigger, state)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				parent := m.spec.stateParents[state]
+				if parent != nil {
+					state = *parent // Move up the hierarchy and try to find a transition from the parent state.
+					continue
+				}
+			}
 			return false
 		}
-	}
 
+		// Return an error if the guard rejects the transition.
+		if guard := trans.Guard; guard != nil {
+			if err := guard(data); err != nil {
+				return false
+			}
+		}
+		break
+	}
 	return true
 }
 
-func (f *Machine[S, T, D]) findTransition(trigger T, state S) (Transition[S, D], error) {
-	transIdx := transitionIndex(state, trigger, f.spec.triggerCount)
-	trans := f.spec.transitions[transIdx]
+func (m *Machine[S, T, D]) findTransition(trigger T, state S) (Transition[S, D], error) {
+	transIdx := transitionIndex(state, trigger, m.spec.triggerCount)
+	trans := m.spec.transitions[transIdx]
 	if !trans.Valid {
 		return Transition[S, D]{}, ErrNotFound
 	}
 	return trans, nil
 }
 
-func (f *Machine[S, T, D]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
+func (m *Machine[S, T, D]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
 	var next *S = &fromState
 	i := 0
 	for ; next != nil && i < maxDepth; i++ {
 		(*hierarchy)[i] = *next
-		next = f.spec.stateParents[*next]
+		next = m.spec.stateParents[*next]
 	}
 	return i
 }

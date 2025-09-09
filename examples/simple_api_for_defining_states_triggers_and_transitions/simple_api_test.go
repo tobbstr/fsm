@@ -55,14 +55,14 @@ func TestSimpleAPI(t *testing.T) {
 
 	// Define transition from red to yellow.
 	builder.Transition().
-		From(red).                                              // The state from which this transition is valid.
-		On(next).                                               // The trigger that causes the transition.
-		To(yellow).                                             // The state to transition to.
-		WithAction(func(ctx context.Context, data data) error { // The action to perform during the transition.
+		From(red).                                                                    // The state from which this transition is valid.
+		On(next).                                                                     // The trigger that causes the transition.
+		To(yellow).                                                                   // The state to transition to.
+		WithAction("transitionToYellow", func(ctx context.Context, data data) error { // The action to perform during the transition.
 			fmt.Println("Transitioning from red to yellow")
 			return nil
 		}).
-		WithGuard(func(ctx context.Context, data data) error { // The guard to check before allowing transition.
+		WithGuard("no-op", func(data data) error { // The guard to check before allowing transition.
 			fmt.Println("Protecting the transition from red to yellow")
 			return nil // Returning an error will disallow the transition.
 		})
@@ -72,11 +72,11 @@ func TestSimpleAPI(t *testing.T) {
 		From(yellow).
 		On(next).
 		To(green).
-		WithAction(func(ctx context.Context, data data) error {
+		WithAction("transitionToGreen", func(ctx context.Context, data data) error {
 			fmt.Println("Transitioning from yellow to green")
 			return nil
 		}).
-		WithGuard(func(ctx context.Context, data data) error {
+		WithGuard("no-op", func(data data) error {
 			fmt.Println("Protecting the transition from yellow to green")
 			return nil
 		})

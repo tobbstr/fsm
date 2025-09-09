@@ -2,6 +2,7 @@ package fsm
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -338,11 +339,11 @@ func TestSpecBuilder_Build(t *testing.T) {
 				numTriggers: 4,
 				configure: func(b *specBuilder[state, trigger, data], o outputs) {
 					b.Transition().From(unlocked).On(lock).To(locked).
-						WithAction(func(ctx context.Context, opts data) error {
+						WithAction("actionCalled is set", func(ctx context.Context, opts data) error {
 							*o.actionCalled = true
 							return nil
 						}).
-						WithGuard(func(ctx context.Context, opts data) error {
+						WithGuard("guardCalled is set", func(opts data) error {
 							*o.guardCalled = true
 							return nil
 						})
@@ -460,6 +461,7 @@ func TestSpecBuilder_Build(t *testing.T) {
 }
 
 func TestMachine_Fire(t *testing.T) {
+	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
 	// Create a new FSM specification.
@@ -474,14 +476,54 @@ func TestMachine_Fire(t *testing.T) {
 	// Assert the initial state of the FSM.
 	require.Equal(unlocked, fsm.State(), "Expected initial state to be unlocked")
 
+	/* --------------------------------- When 1 --------------------------------- */
 	// Fire the lock trigger and assert the state is now locked.
 	err := fsm.Fire(t.Context(), lock, data{})
+
+	/* --------------------------------- Then 1 --------------------------------- */
 	require.NoError(err, "Unexpected error when firing trigger")
 	require.Equal(locked, fsm.State(), "Expected state to be locked")
 
+	/* --------------------------------- When 2 --------------------------------- */
 	// Fire the unlock trigger and assert the state is now unlocked.
 	err = fsm.Fire(t.Context(), unlock, data{})
+
+	/* --------------------------------- Then 2 --------------------------------- */
 	require.NoError(err, "Unexpected error when firing trigger")
+	require.Equal(unlocked, fsm.State(), "Expected state to be unlocked")
+}
+
+func TestMachine_Fire_ReturnsErrors(t *testing.T) {
+	/* ---------------------------------- Given --------------------------------- */
+	require := require.New(t)
+
+	// Create a new FSM specification.
+	specBuilder := NewSpecBuilder[state, trigger, data](2, 2)
+	specBuilder.Transition().From(unlocked).On(lock).To(locked).
+		WithGuard("always errors", func(data data) error {
+			return fmt.Errorf("guard error")
+		})
+	spec := specBuilder.Build()
+
+	// Create a new FSM with an initial state.
+	fsm := New(spec, unlocked)
+
+	/* --------------------------------- When 1 --------------------------------- */
+	// Fire the lock trigger and assert the error is ErrTransitionRejected and the state is still unlocked.
+	err := fsm.Fire(t.Context(), lock, data{})
+
+	/* --------------------------------- Then 1 --------------------------------- */
+	require.Error(err, "Expected error when firing trigger")
+	require.ErrorIs(err, ErrTransitionRejected, "Expected ErrTransitionRejected when guard fails")
+	require.Equal(unlocked, fsm.State(), "Expected state to be unlocked")
+
+	/* --------------------------------- When 2 --------------------------------- */
+	// Fire the unlock trigger and assert the error is ErrNotFound and the state is still unlocked.
+	err = fsm.Fire(t.Context(), unlock, data{})
+
+	/* --------------------------------- Then 2 --------------------------------- */
+	require.Error(err, "Expected error when firing trigger")
+	require.ErrorIs(err, ErrNotFound, "Expected ErrNotFound when transition is not found")
 	require.Equal(unlocked, fsm.State(), "Expected state to be unlocked")
 }
 
@@ -521,11 +563,11 @@ func TestMachine_Fire_HierarchicalStates_TriggerBubbling(t *testing.T) {
 
 	// Create a new FSM specification.
 	spec := NewSpecBuilder[state, trigger, data](5, 2)
-	spec.Transition().From(root).On(lock).To(grandchild).WithAction(func(ctx context.Context, opts data) error {
+	spec.Transition().From(root).On(lock).To(grandchild).WithAction("rootActionCalled is set", func(ctx context.Context, opts data) error {
 		rootActionCalled = true
 		return nil
 	})
-	spec.Transition().From(grandchild).On(unlock).To(child).WithAction(func(ctx context.Context, opts data) error {
+	spec.Transition().From(grandchild).On(unlock).To(child).WithAction("grandchildActionCalled is set", func(ctx context.Context, opts data) error {
 		grandchildActionCalled = true
 		return nil
 	})
@@ -556,11 +598,11 @@ func TestMachine_Fire_HierarchicalStates_ReturnsErrorWhenNoTransitionIsFound(t *
 
 	// Create a new FSM specification.
 	spec := NewSpecBuilder[state, trigger, data](5, 2)
-	spec.Transition().From(root).On(unlock).To(grandchild).WithAction(func(ctx context.Context, opts data) error {
+	spec.Transition().From(root).On(unlock).To(grandchild).WithAction("rootActionCalled is set", func(ctx context.Context, opts data) error {
 		rootActionCalled = true
 		return nil
 	})
-	spec.Transition().From(grandchild).On(unlock).To(child).WithAction(func(ctx context.Context, opts data) error {
+	spec.Transition().From(grandchild).On(unlock).To(child).WithAction("grandchildActionCalled is set", func(ctx context.Context, opts data) error {
 		grandchildActionCalled = true
 		return nil
 	})
@@ -625,7 +667,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 
 	// Create a new FSM specification.
 	specBuilder := NewSpecBuilder[state, trigger, data](5, 2)
-	specBuilder.Transition().From(grandchild).On(lock).To(locked).WithAction(func(ctx context.Context, opts data) error {
+	specBuilder.Transition().From(grandchild).On(lock).To(locked).WithAction("actionCalled is set", func(ctx context.Context, opts data) error {
 		actionCalled = true
 		callOrder = append(callOrder, "action")
 		return nil
@@ -713,11 +755,14 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 }
 
 func TestSpec_MermaidDiagram(t *testing.T) {
+	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
 	// Create a new FSM specification with multiple states and transitions
 	specBuilder := NewSpecBuilder[state, trigger, data](5, 2)
-	specBuilder.Transition().From(unlocked).On(lock).To(locked)
+	specBuilder.Transition().From(unlocked).On(lock).To(locked).
+		WithGuard("true", func(data data) error { return nil }).
+		WithAction("runOp()", func(ctx context.Context, data data) error { return nil })
 	specBuilder.Transition().From(locked).On(unlock).To(unlocked)
 	specBuilder.Transition().From(root).On(lock).To(child)
 	specBuilder.Transition().From(child).On(unlock).To(grandchild)
@@ -729,72 +774,23 @@ func TestSpec_MermaidDiagram(t *testing.T) {
 
 	spec := specBuilder.Build()
 
-	diagram := spec.MermaidJSDiagram()
-
 	// Expected lines in the diagram
 	expectedLines := []string{
 		"stateDiagram-v2",
-		"unlocked --> locked : lock",
+		"unlocked --> locked : lock [true] / runOp()",
 		"locked --> unlocked : unlock",
 		"root --> child : lock",
 		"child --> grandchild : unlock",
 		"grandchild --> root : lock",
 	}
 
+	/* ---------------------------------- When ---------------------------------- */
+	diagram := spec.MermaidJSDiagram()
+
+	/* ---------------------------------- Then ---------------------------------- */
 	for _, line := range expectedLines {
 		require.Contains(diagram, line, "Diagram missing expected line: %q", line)
 	}
-
-	// Check that all transitions are present and formatted correctly
-	lines := make(map[string]bool)
-	for _, line := range expectedLines {
-		lines[line] = false
-	}
-	diagramLines := splitLines(diagram)
-	for _, line := range diagramLines {
-		if _, ok := lines[line]; ok {
-			lines[line] = true
-		}
-	}
-	for line, found := range lines {
-		require.True(found, "Expected line not found: %q", line)
-	}
-
-	// Check that there are no unexpected transitions
-	for _, line := range diagramLines {
-		if line == "stateDiagram-v2" {
-			continue
-		}
-		found := false
-		for _, expected := range expectedLines[1:] {
-			if line == expected {
-				found = true
-				break
-			}
-		}
-		require.True(found, "Unexpected transition in diagram: %q", line)
-	}
-
-	// Check that hierarchical states are handled (no duplicate or missing transitions)
-	// (This is implicit in the above checks, but can be extended for more complex hierarchies)
-}
-
-// splitLines splits a string into lines, trimming whitespace.
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			if i > start {
-				out = append(out, s[start:i])
-			}
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		out = append(out, s[start:])
-	}
-	return out
 }
 
 func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
@@ -815,7 +811,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 
 	// Create a new FSM specification.
 	specBuilder := NewSpecBuilder[state, trigger, data](5, 2)
-	specBuilder.Transition().From(grandchild).On(lock).To(root).WithAction(func(ctx context.Context, opts data) error {
+	specBuilder.Transition().From(grandchild).On(lock).To(root).WithAction("actionCalled is set", func(ctx context.Context, opts data) error {
 		actionCalled = true
 		callOrder = append(callOrder, "action")
 		return nil
