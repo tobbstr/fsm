@@ -42,93 +42,135 @@ go get github.com/tobbstr/fsm
 ## Usage
 
 ```go
-package main
-
 import (
-	"fmt"
-
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/tobbstr/fsm"
+    "context"
+    "database/sql"
+    "errors"
+    "github.com/tobbstr/fsm"
 )
 
-var stateNames = []string{"red", "yellow", "green"}
-var triggerNames = []string{"next"}
-
+type orderState uint
 const (
-	red state = iota
-	yellow
-	green
+    stateCreated orderState = iota
+    statePaid
+    stateShipped
 )
 
+type orderTrigger uint
 const (
-	next trigger = iota
+    triggerPay orderTrigger = iota
+    triggerShip
 )
 
-type state uint
-
-func (s state) String() string {
-	return stateNames[s]
+// All data needed for guards and actions is loaded outside the FSM and passed in here
+type orderData struct {
+    orderID int
+    db *sql.DB
+    currentStatus string // loaded from DB before calling Fire
 }
 
-type trigger uint
+// Define the FSM specification. It should be stored in a global variable to avoid having to recreate it each time.
+// This is safe as the spec is read-only.
+func fsmSpec() *fsm.Spec[orderState, orderTrigger, orderData] {
+    builder := fsm.NewSpecBuilder[orderState, orderTrigger, orderData](3, 2)
 
-func (t trigger) String() string {
-	return triggerNames[t]
+    builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
+        // Guards are pure functions and the implementations of business rules.
+        WithGuard(func(d orderData) bool {
+            return d.currentStatus == "paid"
+        }).
+        // Actions perform side effects.
+        WithAction(func(ctx context.Context, d orderData) error {
+            if err := updateStatus(ctx, d.db, d.orderID, "shipped"); err != nil {
+                return err
+            }
+            return notifyShipped(ctx, d.db, d.orderID)
+        })
+
+    // ...other transitions...
+    return builder.Build()
 }
 
-type data struct{
-    pool *pgxpool.Pool
+// Usage in your application service method:
+func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
+    order, err := s.loadOrder(ctx, orderID)
+    if err != nil {
+        return err
+    }
+    m := fsm.New(fsmSpec(), stateFromString(order.Status))
+    // Pass all required data to the FSM
+    return m.Fire(ctx, triggerShip, orderData{
+        orderID: orderID,
+        db: s.db,
+        currentStatus: order.Status,
+    })
 }
 
-func main() {
-    // Initialize database connection pool.
-    myPgxPool, err := pgxpool.New(context.Background(), "your-database-url")
-    // .. handle error ..
-    defer myPgxPool.Close()
+func stateFromString(status string) orderState {
+    switch status {
+    case "created":
+        return stateCreated
+    case "paid":
+        return statePaid
+    case "shipped":
+        return stateShipped
+    default:
+        panic("unknown state")
+    }
+}
 
-    // Constructs a new FSM specification builder.
-    builder := fsm.NewSpecBuilder[state, trigger, data](3, 1)
-
-    // Define transitions
-    builder.Transition().From(red).On(next).To(yellow)
-    builder.Transition().From(yellow).On(next).To(green)
-
-    // Only initialize this once as it is read-only, meaning thread-safe.
-    // Store it in a global variable.
-    spec := builder.Build()
-
-    // Creates instance of the FSM with the initial state `red`.
-    // This should be instantiated every time the FSM is needed. For example, in a request handler.
-    m := fsm.New(spec, red)
-
-    // Trigger events
-    state := m.State() // returns red
-    err := m.Fire(context.Background(), next, data{pool: myPgxPool})
-    // .. handle error ..
-
-    state := m.State() // returns yellow
-    err := m.Fire(context.Background(), next, data{pool: myPgxPool})
-    // .. handle error ..
-
-    state := m.State() // returns green
-
-    err := m.Fire(context.Background(), next, data{pool: myPgxPool}) // Returns a fsm.ErrNotFound error as there is not defined transition from green for the trigger (next).
+// Example side-effect functions
+func updateStatus(ctx context.Context, db *sql.DB, orderID int, status string) error {
+    // ... update order in DB ...
+    return nil
+}
+func notifyShipped(ctx context.Context, db *sql.DB, orderID int) error {
+    // ... send notification ...
+    return nil
 }
 ```
 
-For more examples, see [examples](./examples).
+If your application service needs to perform several conditional operations in sequence, and you want
+to return as soon as any operation succeeds, use the sentinel error `fsm.ErrTransitionRejected`.
+This error lets you handle rejected transitions gracefully. Your application service controls the
+order in which transitions are attempted, while the FSM checks business rules and executes side effects.
+
+```go
+func (s *Service) RunOperationWithMultipleConditionalSteps(ctx context.Context) error {
+    // Gather necessary data from in-memory, the database or external services.
+    // ...
+    m := fsm.New(fsmSpec(), stateA)
+    err := m.Fire(ctx, triggerX, data{...})
+    if err == nil { // Return early if the transition was successful.
+        return nil
+    }
+    if !errors.Is(err, fsm.ErrTransitionRejected) {
+        return fmt.Errorf("add more context: %w", err) // an actual error occurred
+    }
+    // Otherwise, the transition was rejected due to the guard function not passing, i.e., the business rules were not met.
+
+    // That means we can try another transition.
+    err = m.Fire(ctx, triggerY, data{...})
+    if err == nil { // Return early if the transition was successful.
+        return nil
+    }
+    if !errors.Is(err, fsm.ErrTransitionRejected) {
+        return fmt.Errorf("add more context: %w", err) // an actual error occurred
+    }
+    // The transition was rejected due to the guard function not passing, i.e., the business rules were not met.
+
+    // If we have reached the final transition to attempt, then...
+    if err = m.Fire(ctx, triggerZ, data{...}); err != nil {
+        return fmt.Errorf("add more context: %w", err) // either the transition was rejected or an actual error occurred
+    }
+    return nil // the transition was successful
+}
+
+```
 
 ## API Reference
 
 See [fsm.go](fsm.go) for full API documentation and comments.
-
-## Testing
-
-Run unit tests with:
-
-```sh
-go test ./...
-```
 
 ## License
 
