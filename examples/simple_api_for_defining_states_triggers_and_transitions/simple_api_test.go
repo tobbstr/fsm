@@ -9,9 +9,6 @@ import (
 	"github.com/tobbstr/fsm"
 )
 
-var stateNames = []string{"red", "yellow", "green"}
-var triggerNames = []string{"next"}
-
 const (
 	red state = iota
 	yellow
@@ -25,13 +22,27 @@ const (
 type state uint
 
 func (s state) String() string {
-	return stateNames[s]
+	switch s {
+	case red:
+		return "red"
+	case yellow:
+		return "yellow"
+	case green:
+		return "green"
+	default:
+		return fmt.Sprintf("state(%d)", s)
+	}
 }
 
 type trigger uint
 
 func (t trigger) String() string {
-	return triggerNames[t]
+	switch t {
+	case next:
+		return "next"
+	default:
+		return fmt.Sprintf("trigger(%d)", t)
+	}
 }
 
 type anyTypeExample struct {

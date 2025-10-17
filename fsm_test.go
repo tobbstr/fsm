@@ -8,9 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var stateNames = []string{"locked", "unlocked", "root", "child", "grandchild"}
-var triggerNames = []string{"unlock", "lock"}
-
 const (
 	locked state = iota
 	unlocked
@@ -27,13 +24,33 @@ const (
 type state uint
 
 func (s state) String() string {
-	return stateNames[s]
+	switch s {
+	case locked:
+		return "locked"
+	case unlocked:
+		return "unlocked"
+	case root:
+		return "root"
+	case child:
+		return "child"
+	case grandchild:
+		return "grandchild"
+	default:
+		return fmt.Sprintf("state(%d)", s)
+	}
 }
 
 type trigger uint
 
 func (t trigger) String() string {
-	return triggerNames[t]
+	switch t {
+	case unlock:
+		return "unlock"
+	case lock:
+		return "lock"
+	default:
+		return fmt.Sprintf("trigger(%d)", t)
+	}
 }
 
 type data struct{}

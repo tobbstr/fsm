@@ -46,10 +46,12 @@ func (s state) String() string {
 type trigger uint
 
 func (t trigger) String() string {
-	if t == ChangeFocus {
+	switch t {
+	case ChangeFocus:
 		return "ChangeFocus"
+	default:
+		return fmt.Sprintf("trigger(%d)", t)
 	}
-	return fmt.Sprintf("trigger(%d)", t)
 }
 
 type data struct{}
