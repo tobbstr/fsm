@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Dummy states, triggers, and data types for benchmarking
+// Dummy states, triggers, and payload types for benchmarking
 const (
 	stateA = iota
 	stateB
@@ -65,10 +65,10 @@ const (
 	triggerZ
 )
 
-type dummyOpts struct{}
+type dummyPayload struct{}
 
-func setupBenchmarkFSM() *Machine[uint, uint, dummyOpts] {
-	builder := NewSpecBuilder[uint, uint, dummyOpts](26, 26)
+func setupBenchmarkFSM() *Machine[uint, uint, dummyPayload] {
+	builder := NewSpecBuilder[uint, uint, dummyPayload](26, 26)
 	builder.Transition().From(stateA).On(triggerA).To(stateB)
 	builder.Transition().From(stateB).On(triggerA).To(stateC)
 	builder.Transition().From(stateC).On(triggerA).To(stateD)
@@ -102,9 +102,9 @@ func setupBenchmarkFSM() *Machine[uint, uint, dummyOpts] {
 func BenchmarkFire(b *testing.B) {
 	ctx := context.Background()
 	fsm := setupBenchmarkFSM()
-	opts := dummyOpts{}
+	payload := dummyPayload{}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = fsm.Fire(ctx, triggerA, opts)
+		_ = fsm.Fire(ctx, triggerA, payload)
 	}
 }

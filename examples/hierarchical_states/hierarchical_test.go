@@ -54,7 +54,7 @@ func (t trigger) String() string {
 	}
 }
 
-type data struct{}
+type payload struct{}
 
 var handleError = func(err error) {
 	// .. handle error ..
@@ -78,7 +78,7 @@ func TestHierarchicalStates(t *testing.T) {
 	// and then down to the target state (Grandchild B). On the way up the states' OnExit hooks will be called and on
 	// the way down the OnEntry hooks will be called.
 
-	builder := fsm.NewSpecBuilder[state, trigger, data](6, 1) // 6 states, 1 trigger
+	builder := fsm.NewSpecBuilder[state, trigger, payload](6, 1) // 6 states, 1 trigger
 
 	// Hierarchy setup
 	builder.State(Parent).Parent(Root)
@@ -92,11 +92,11 @@ func TestHierarchicalStates(t *testing.T) {
 		From(GrandchildA).
 		On(ChangeFocus).
 		To(GrandchildB).
-		WithAction("printTransition()", func(ctx context.Context, data data) error {
+		WithAction("printTransition()", func(ctx context.Context, p payload) error {
 			fmt.Println("Transitioning from GrandchildA to GrandchildB")
 			return nil
 		}).
-		WithGuard("no-op", func(data data) error {
+		WithGuard("no-op", func(p payload) error {
 			fmt.Println("Guarding transition from GrandchildA to GrandchildB")
 			return nil
 		})
@@ -104,11 +104,11 @@ func TestHierarchicalStates(t *testing.T) {
 	// State hooks for all states
 	for _, s := range []state{Root, Parent, ChildA, GrandchildA, ChildB, GrandchildB} {
 		builder.State(s).
-			OnEntry(func(ctx context.Context, data data) error {
+			OnEntry(func(ctx context.Context, p payload) error {
 				fmt.Printf("Entering %v state\n", s)
 				return nil
 			}).
-			OnExit(func(ctx context.Context, data data) error {
+			OnExit(func(ctx context.Context, p payload) error {
 				fmt.Printf("Exiting %v state\n", s)
 				return nil
 			})
@@ -118,7 +118,7 @@ func TestHierarchicalStates(t *testing.T) {
 	m := fsm.New(spec, GrandchildA) // Initial state is GrandchildA
 
 	fmt.Printf("Current state: %v\n", m.State())
-	err := m.Fire(context.Background(), ChangeFocus, data{})
+	err := m.Fire(context.Background(), ChangeFocus, payload{})
 	handleError(err)
 	fmt.Printf("Current state: %v\n", m.State())
 }
