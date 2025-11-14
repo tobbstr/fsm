@@ -45,9 +45,9 @@ func (t trigger) String() string {
 	}
 }
 
-// OrderPayload represents the business data passed per Fire() call.
+// OrderInput represents the business data passed per Fire() call.
 // This contains only the per-transition data, not infrastructure dependencies.
-type OrderPayload struct {
+type OrderInput struct {
 	OrderID    string
 	CustomerID string
 	Amount     float64
@@ -76,25 +76,25 @@ func TestSimpleAPI(t *testing.T) {
 	}
 
 	// Constructs a new FSM specification builder.
-	// Note: Only 3 type parameters now (state, trigger, OrderPayload)
-	builder := fsm.NewSpecBuilder[state, trigger, OrderPayload](3, 1) // 3 states, 1 trigger
+	// Note: Only 3 type parameters now (state, trigger, OrderInput)
+	builder := fsm.NewSpecBuilder[state, trigger, OrderInput](3, 1) // 3 states, 1 trigger
 
 	// Define transition from red to yellow.
 	builder.Transition().
 		From(red).     // The state from which this transition is valid.
 		On(next).      // The trigger that causes the transition.
 		To(yellow).    // The state to transition to.
-		WithAction("transitionToYellow", func(ctx context.Context, payload OrderPayload) error { // The action to perform during the transition.
+		WithAction("transitionToYellow", func(ctx context.Context, input OrderInput) error { // The action to perform during the transition.
 			// Services are captured from outer scope via Go closures.
 			// This keeps the Fire() call site clean!
 			_ = services // In a real app, you'd use: services.Logger.Printf(...), services.DB.Exec(...)
-			fmt.Printf("Transitioning order %s from red to yellow\n", payload.OrderID)
+			fmt.Printf("Transitioning order %s from red to yellow\n", input.OrderID)
 			return nil
 		}).
-		WithGuard("no-op", func(payload OrderPayload) error { // The guard to check before allowing transition.
+		WithGuard("no-op", func(input OrderInput) error { // The guard to check before allowing transition.
 			// Services can also be accessed in guards via closure.
 			_ = services
-			fmt.Printf("Protecting the transition for order %s from red to yellow\n", payload.OrderID)
+			fmt.Printf("Protecting the transition for order %s from red to yellow\n", input.OrderID)
 			return nil // Returning an error will disallow the transition.
 		})
 
@@ -103,56 +103,56 @@ func TestSimpleAPI(t *testing.T) {
 		From(yellow).
 		On(next).
 		To(green).
-		WithAction("transitionToGreen", func(ctx context.Context, payload OrderPayload) error {
+		WithAction("transitionToGreen", func(ctx context.Context, input OrderInput) error {
 			_ = services
-			fmt.Printf("Transitioning order %s from yellow to green\n", payload.OrderID)
+			fmt.Printf("Transitioning order %s from yellow to green\n", input.OrderID)
 			return nil
 		}).
-		WithGuard("no-op", func(payload OrderPayload) error {
+		WithGuard("no-op", func(input OrderInput) error {
 			_ = services
-			fmt.Printf("Protecting the transition for order %s from yellow to green\n", payload.OrderID)
+			fmt.Printf("Protecting the transition for order %s from yellow to green\n", input.OrderID)
 			return nil
 		})
 
 	// Define state hooks for red.
 	builder.
 		State(red). // Configures the `red` state.
-		OnEntry(func(ctx context.Context, payload OrderPayload) error { // Called whenever transitioning into the `red` state.
+		OnEntry(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `red` state.
 			_ = services
-			fmt.Printf("Order %s entering red state\n", payload.OrderID)
+			fmt.Printf("Order %s entering red state\n", input.OrderID)
 			return nil
 		}).
-		OnExit(func(ctx context.Context, payload OrderPayload) error { // Called whenever transitioning out of the `red` state.
+		OnExit(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `red` state.
 			_ = services
-			fmt.Printf("Order %s exiting red state\n", payload.OrderID)
+			fmt.Printf("Order %s exiting red state\n", input.OrderID)
 			return nil
 		})
 
 	// Define state hooks for yellow.
 	builder.
 		State(yellow). // Configures the `yellow` state.
-		OnEntry(func(ctx context.Context, payload OrderPayload) error { // Called whenever transitioning into the `yellow` state.
+		OnEntry(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `yellow` state.
 			_ = services
-			fmt.Printf("Order %s entering yellow state\n", payload.OrderID)
+			fmt.Printf("Order %s entering yellow state\n", input.OrderID)
 			return nil
 		}).
-		OnExit(func(ctx context.Context, payload OrderPayload) error { // Called whenever transitioning out of the `yellow` state.
+		OnExit(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `yellow` state.
 			_ = services
-			fmt.Printf("Order %s exiting yellow state\n", payload.OrderID)
+			fmt.Printf("Order %s exiting yellow state\n", input.OrderID)
 			return nil
 		})
 
 	// Define state hooks for green.
 	builder.
 		State(green). // Configures the `green` state.
-		OnEntry(func(ctx context.Context, payload OrderPayload) error { // Called whenever transitioning into the `green` state.
+		OnEntry(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `green` state.
 			_ = services
-			fmt.Printf("Order %s entering green state\n", payload.OrderID)
+			fmt.Printf("Order %s entering green state\n", input.OrderID)
 			return nil
 		}).
-		OnExit(func(ctx context.Context, payload OrderPayload) error { // Called whenever transitioning out of the `green` state.
+		OnExit(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `green` state.
 			_ = services
-			fmt.Printf("Order %s exiting green state\n", payload.OrderID)
+			fmt.Printf("Order %s exiting green state\n", input.OrderID)
 			return nil
 		})
 
@@ -166,12 +166,12 @@ func TestSimpleAPI(t *testing.T) {
 	m := fsm.New(spec, red)
 
 	// Trigger events with clean Fire() calls!
-	// Notice: We only pass business data (OrderPayload), not services/infrastructure.
+	// Notice: We only pass business data (OrderInput), not services/infrastructure.
 	currentState := m.State() // returns red
 	fmt.Printf("Current state: %s\n", currentState)
 	
-	// Clean Fire() call - only business payload, no DB/Logger/Services!
-	err := m.Fire(context.Background(), next, OrderPayload{
+	// Clean Fire() call - only business input, no DB/Logger/Services!
+	err := m.Fire(context.Background(), next, OrderInput{
 		OrderID:    "ORD-123",
 		CustomerID: "CUST-456",
 		Amount:     99.99,
@@ -182,7 +182,7 @@ func TestSimpleAPI(t *testing.T) {
 	fmt.Printf("Current state: %s\n", currentState)
 	
 	// Another clean Fire() call
-	err = m.Fire(context.Background(), next, OrderPayload{
+	err = m.Fire(context.Background(), next, OrderInput{
 		OrderID:    "ORD-123",
 		CustomerID: "CUST-456",
 		Amount:     99.99,
@@ -193,7 +193,7 @@ func TestSimpleAPI(t *testing.T) {
 	fmt.Printf("Current state: %s\n", currentState)
 
 	// Returns a fsm.ErrNotFound error as there is not a defined transition from green to another state for the trigger (next).
-	err = m.Fire(context.Background(), next, OrderPayload{
+	err = m.Fire(context.Background(), next, OrderInput{
 		OrderID:    "ORD-123",
 		CustomerID: "CUST-456",
 		Amount:     99.99,

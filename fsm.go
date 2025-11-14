@@ -2,6 +2,8 @@
 //
 // Features:
 //   - Simple API for defining states, triggers, and transitions.
+//   - Stimuli-based transitions: the trigger and input together form the stimuli that attempt to stimulate
+//     the FSM to move into another state.
 //   - Side effects via transition actions and state entry/exit hooks.
 //   - Fine-grained control with transition guards.
 //   - Hierarchical states with support for nested state logic.
@@ -16,14 +18,14 @@
 //	type State uint
 //	type Trigger uint
 //
-//	// Define your payload type (per-call business data).
-//	type OrderPayload struct {
+//	// Define your input type (per-call business data).
+//	type OrderInput struct {
 //		OrderID    string
 //		CustomerID string
 //	}
 //
 //	// Create a new FSM specification builder.
-//	builder := fsm.NewSpecBuilder[State, Trigger, OrderPayload](numStates, numTriggers)
+//	builder := fsm.NewSpecBuilder[State, Trigger, OrderInput](numStates, numTriggers)
 //
 //	// Define transitions and state hooks.
 //	builder.Transition().From(...).On(...).To(...).WithAction(...).WithGuard(...)
@@ -36,7 +38,7 @@
 //	machine := fsm.New(spec, initialState)
 //
 //	// Fire triggers to perform transitions with business data.
-//	err := machine.Fire(ctx, trigger, OrderPayload{OrderID: "123", CustomerID: "456"})
+//	err := machine.Fire(ctx, trigger, OrderInput{OrderID: "123", CustomerID: "456"})
 //
 // Dependency Injection Pattern:
 //
@@ -50,16 +52,16 @@
 //	}
 //
 //	// Create spec with services captured via closure.
-//	func SetupOrderFSM(services Services) *fsm.Spec[State, Trigger, OrderPayload] {
-//		builder := fsm.NewSpecBuilder[State, Trigger, OrderPayload](numStates, numTriggers)
+//	func SetupOrderFSM(services Services) *fsm.Spec[State, Trigger, OrderInput] {
+//		builder := fsm.NewSpecBuilder[State, Trigger, OrderInput](numStates, numTriggers)
 //
 //		// Services are captured from outer scope.
 //		builder.Transition().
 //			From(Pending).On(Confirm).To(Confirmed).
-//			WithAction("save order", func(ctx context.Context, payload OrderPayload) error {
+//			WithAction("save order", func(ctx context.Context, input OrderInput) error {
 //				// Access services via closure - clean and type-safe.
-//				services.Logger.Printf("Confirming order %s", payload.OrderID)
-//				return saveOrder(services.DB, payload.OrderID)
+//				services.Logger.Printf("Confirming order %s", input.OrderID)
+//				return saveOrder(services.DB, input.OrderID)
 //			})
 //
 //		return builder.Build()
@@ -68,7 +70,7 @@
 //	// Usage: Clean call sites with only business data.
 //	spec := SetupOrderFSM(services)
 //	machine := fsm.New(spec, Pending)
-//	machine.Fire(ctx, Confirm, OrderPayload{OrderID: "123"})
+//	machine.Fire(ctx, Confirm, OrderInput{OrderID: "123"})
 //
 // See README.md and examples for more details.
 package fsm
@@ -89,73 +91,73 @@ var (
 
 type (
 	// Guard is a function that checks whether a transition is allowed to occur.
-	Guard[Payload any] func(payload Payload) error
+	Guard[Input any] func(input Input) error
 	// Action is a function that performs an action when a transition occurs.
-	Action[Payload any] func(ctx context.Context, payload Payload) error
+	Action[Input any] func(ctx context.Context, input Input) error
 )
 
 // Transition represents a state transition in the FSM.
-type Transition[S ~uint, Payload any] struct {
+type Transition[S ~uint, Input any] struct {
 	Valid             bool
 	Next              S
-	Guard             Guard[Payload]
+	Guard             Guard[Input]
 	GuardDescription  string
-	Action            Action[Payload]
+	Action            Action[Input]
 	ActionDescription string
 }
 
 // StateHooks represents hooks that can be triggered on state entry and exit.
-type StateHooks[Payload any] struct {
-	OnEntry Action[Payload]
-	OnExit  Action[Payload]
+type StateHooks[Input any] struct {
+	OnEntry Action[Input]
+	OnExit  Action[Input]
 }
 
-type specBuilder[S, T ~uint, Payload any] struct {
+type specBuilder[S, T ~uint, Input any] struct {
 	stateCount    uint
 	triggerCount  uint
-	transitions   []Transition[S, Payload]
-	stateHooks    []StateHooks[Payload]
+	transitions   []Transition[S, Input]
+	stateHooks    []StateHooks[Input]
 	stateParents  []*S
 	initialStates []*S
 
 	/* ------------------------ Builder Chaining Helpers ------------------------ */
 	// Enables tracking of completed transition definitions, so their .done() methods can be called when
 	// building the FSM model.
-	transitionToBuilders []*transitionToBuilder[S, T, Payload]
+	transitionToBuilders []*transitionToBuilder[S, T, Input]
 	// Enables panicking if not all transition definitions are completed, by comparing the number of started
 	// transition definitions with the number of completed ones ( len(transitionToBuilders) ).
 	numTransitionDefinitionsStarted int
-	stateBuilders                   []*stateBuilder[S, T, Payload]
+	stateBuilders                   []*stateBuilder[S, T, Input]
 }
 
 // NewSpecBuilder creates a new specBuilder used for building FSM specifications which define the states, triggers
 // and transitions in the FSM.
-func NewSpecBuilder[S, T ~uint, Payload any](numStates, numTriggers uint) *specBuilder[S, T, Payload] {
+func NewSpecBuilder[S, T ~uint, Input any](numStates, numTriggers uint) *specBuilder[S, T, Input] {
 	if numStates == 0 || numTriggers == 0 {
 		panic("number of states and triggers must be greater than zero")
 	}
 
-	return &specBuilder[S, T, Payload]{
+	return &specBuilder[S, T, Input]{
 		stateCount:    numStates,
 		triggerCount:  numTriggers,
-		transitions:   make([]Transition[S, Payload], numStates*numTriggers),
-		stateHooks:    make([]StateHooks[Payload], numStates),
+		transitions:   make([]Transition[S, Input], numStates*numTriggers),
+		stateHooks:    make([]StateHooks[Input], numStates),
 		stateParents:  make([]*S, numStates),
 		initialStates: make([]*S, numStates),
 	}
 }
 
 // Transition begins the definition of a new transition.
-func (b *specBuilder[S, T, Payload]) Transition() *transitionBuilder[S, T, Payload] {
+func (b *specBuilder[S, T, Input]) Transition() *transitionBuilder[S, T, Input] {
 	b.numTransitionDefinitionsStarted++
-	return &transitionBuilder[S, T, Payload]{
+	return &transitionBuilder[S, T, Input]{
 		b: b,
 	}
 }
 
 // State begins the definition of a new state.
-func (b *specBuilder[S, T, Payload]) State(state S) *stateBuilder[S, T, Payload] {
-	sb := &stateBuilder[S, T, Payload]{
+func (b *specBuilder[S, T, Input]) State(state S) *stateBuilder[S, T, Input] {
+	sb := &stateBuilder[S, T, Input]{
 		b:     b,
 		state: state,
 	}
@@ -164,7 +166,7 @@ func (b *specBuilder[S, T, Payload]) State(state S) *stateBuilder[S, T, Payload]
 }
 
 // Build finalizes the FSM specification and returns a new Spec instance.
-func (b *specBuilder[S, T, Payload]) Build() *Spec[S, T, Payload] {
+func (b *specBuilder[S, T, Input]) Build() *Spec[S, T, Input] {
 	if b.numTransitionDefinitionsStarted != len(b.transitionToBuilders) {
 		panic("not all transition definitions were completed")
 	}
@@ -195,7 +197,7 @@ func (b *specBuilder[S, T, Payload]) Build() *Spec[S, T, Payload] {
 		}
 	}
 
-	return &Spec[S, T, Payload]{
+	return &Spec[S, T, Input]{
 		stateCount:    b.stateCount,
 		triggerCount:  b.triggerCount,
 		transitions:   b.transitions,
@@ -205,41 +207,41 @@ func (b *specBuilder[S, T, Payload]) Build() *Spec[S, T, Payload] {
 	}
 }
 
-type transitionBuilder[S, T ~uint, Payload any] struct {
-	b *specBuilder[S, T, Payload]
+type transitionBuilder[S, T ~uint, Input any] struct {
+	b *specBuilder[S, T, Input]
 }
 
 // From sets the source state for the transition.
-func (tb *transitionBuilder[S, T, Payload]) From(state S) *transitionFromBuilder[S, T, Payload] {
-	return &transitionFromBuilder[S, T, Payload]{
+func (tb *transitionBuilder[S, T, Input]) From(state S) *transitionFromBuilder[S, T, Input] {
+	return &transitionFromBuilder[S, T, Input]{
 		b:    tb.b,
 		from: state,
 	}
 }
 
-type transitionFromBuilder[S, T ~uint, Payload any] struct {
-	b    *specBuilder[S, T, Payload]
+type transitionFromBuilder[S, T ~uint, Input any] struct {
+	b    *specBuilder[S, T, Input]
 	from S
 }
 
 // On sets the trigger for the transition.
-func (fb *transitionFromBuilder[S, T, Payload]) On(trigger T) *transitionOnBuilder[S, T, Payload] {
-	return &transitionOnBuilder[S, T, Payload]{
+func (fb *transitionFromBuilder[S, T, Input]) On(trigger T) *transitionOnBuilder[S, T, Input] {
+	return &transitionOnBuilder[S, T, Input]{
 		from:    fb.from,
 		trigger: trigger,
 		b:       fb.b,
 	}
 }
 
-type transitionOnBuilder[S, T ~uint, Payload any] struct {
+type transitionOnBuilder[S, T ~uint, Input any] struct {
 	from    S
 	trigger T
-	b       *specBuilder[S, T, Payload]
+	b       *specBuilder[S, T, Input]
 }
 
 // To sets the target state for the transition.
-func (tb *transitionOnBuilder[S, T, Payload]) To(state S) *transitionToBuilder[S, T, Payload] {
-	toBuilder := &transitionToBuilder[S, T, Payload]{
+func (tb *transitionOnBuilder[S, T, Input]) To(state S) *transitionToBuilder[S, T, Input] {
+	toBuilder := &transitionToBuilder[S, T, Input]{
 		b:       tb.b,
 		from:    tb.from,
 		trigger: tb.trigger,
@@ -249,14 +251,14 @@ func (tb *transitionOnBuilder[S, T, Payload]) To(state S) *transitionToBuilder[S
 	return toBuilder
 }
 
-type transitionToBuilder[S, T ~uint, Payload any] struct {
-	b                 *specBuilder[S, T, Payload]
+type transitionToBuilder[S, T ~uint, Input any] struct {
+	b                 *specBuilder[S, T, Input]
 	from              S
 	trigger           T
 	to                S
-	guard             Guard[Payload]
+	guard             Guard[Input]
 	guardDescription  string
-	action            Action[Payload]
+	action            Action[Input]
 	actionDescription string
 }
 
@@ -274,7 +276,7 @@ type transitionToBuilder[S, T ~uint, Payload any] struct {
 //	"balance >= amount"
 //	"isUserAuthenticated"
 //	"canWithdraw"
-func (tb *transitionToBuilder[S, T, Payload]) WithGuard(desc string, guard Guard[Payload]) *transitionToBuilder[S, T, Payload] {
+func (tb *transitionToBuilder[S, T, Input]) WithGuard(desc string, guard Guard[Input]) *transitionToBuilder[S, T, Input] {
 	tb.guard = guard
 	tb.guardDescription = desc
 	return tb
@@ -295,15 +297,15 @@ func (tb *transitionToBuilder[S, T, Payload]) WithGuard(desc string, guard Guard
 //	"deduct balance"
 //	"send notification"
 //	"logTransition()"
-func (tb *transitionToBuilder[S, T, Payload]) WithAction(desc string, action Action[Payload]) *transitionToBuilder[S, T, Payload] {
+func (tb *transitionToBuilder[S, T, Input]) WithAction(desc string, action Action[Input]) *transitionToBuilder[S, T, Input] {
 	tb.action = action
 	tb.actionDescription = desc
 	return tb
 }
 
-func (tb *transitionToBuilder[S, T, Payload]) done() *specBuilder[S, T, Payload] {
+func (tb *transitionToBuilder[S, T, Input]) done() *specBuilder[S, T, Input] {
 	idx := transitionIndex(tb.from, tb.trigger, tb.b.triggerCount)
-	tb.b.transitions[idx] = Transition[S, Payload]{
+	tb.b.transitions[idx] = Transition[S, Input]{
 		Valid:             true,
 		Next:              tb.to,
 		Guard:             tb.guard,
@@ -319,10 +321,10 @@ func transitionIndex[S, T ~uint](from S, trigger T, numTrigger uint) int {
 	return int(uint(from)*numTrigger + uint(trigger))
 }
 
-type stateBuilder[S, T ~uint, Payload any] struct {
-	b                 *specBuilder[S, T, Payload]
+type stateBuilder[S, T ~uint, Input any] struct {
+	b                 *specBuilder[S, T, Input]
 	state             S
-	hooks             StateHooks[Payload]
+	hooks             StateHooks[Input]
 	parent            S
 	isParentSet       bool
 	initialState      S
@@ -330,19 +332,19 @@ type stateBuilder[S, T ~uint, Payload any] struct {
 }
 
 // OnEntry sets the OnEntry hook for the state. It is called when the state is entered.
-func (sb *stateBuilder[S, T, Payload]) OnEntry(action Action[Payload]) *stateBuilder[S, T, Payload] {
+func (sb *stateBuilder[S, T, Input]) OnEntry(action Action[Input]) *stateBuilder[S, T, Input] {
 	sb.hooks.OnEntry = action
 	return sb
 }
 
 // OnExit sets the OnExit hook for the state. It is called when the state is exited.
-func (sb *stateBuilder[S, T, Payload]) OnExit(action Action[Payload]) *stateBuilder[S, T, Payload] {
+func (sb *stateBuilder[S, T, Input]) OnExit(action Action[Input]) *stateBuilder[S, T, Input] {
 	sb.hooks.OnExit = action
 	return sb
 }
 
 // Parent sets the parent state for hierarchical state machines.
-func (sb *stateBuilder[S, T, Payload]) Parent(state S) *stateBuilder[S, T, Payload] {
+func (sb *stateBuilder[S, T, Input]) Parent(state S) *stateBuilder[S, T, Input] {
 	sb.parent = state
 	sb.isParentSet = true
 	return sb
@@ -352,13 +354,13 @@ func (sb *stateBuilder[S, T, Payload]) Parent(state S) *stateBuilder[S, T, Paylo
 //
 // NOTE: If set, the initial state MUST have the same parent as the state it is being defined on. Otherwise,
 // the call to build the FSM specification will panic.
-func (sb *stateBuilder[S, T, Payload]) Initial(state S) *stateBuilder[S, T, Payload] {
+func (sb *stateBuilder[S, T, Input]) Initial(state S) *stateBuilder[S, T, Input] {
 	sb.initialState = state
 	sb.isInitialStateSet = true
 	return sb
 }
 
-func (sb *stateBuilder[S, T, Payload]) done() *specBuilder[S, T, Payload] {
+func (sb *stateBuilder[S, T, Input]) done() *specBuilder[S, T, Input] {
 	sb.b.stateHooks[sb.state] = sb.hooks
 	if sb.isParentSet {
 		sb.b.stateParents[sb.state] = &sb.parent
@@ -371,17 +373,17 @@ func (sb *stateBuilder[S, T, Payload]) done() *specBuilder[S, T, Payload] {
 
 // Spec represents the specification of the FSM, including its states, triggers, and transitions. It is safe to make
 // shallow copies of the Spec as it is read-only, making it thread-safe.
-type Spec[S, T ~uint, Payload any] struct {
+type Spec[S, T ~uint, Input any] struct {
 	stateCount    uint
 	triggerCount  uint
-	transitions   []Transition[S, Payload]
-	stateHooks    []StateHooks[Payload]
+	transitions   []Transition[S, Input]
+	stateHooks    []StateHooks[Input]
 	stateParents  []*S
 	initialStates []*S
 }
 
 // MermaidJSDiagram returns a state diagram in Mermaid.js syntax for the FSM Spec.
-func (spec *Spec[S, T, Payload]) MermaidJSDiagram() string {
+func (spec *Spec[S, T, Input]) MermaidJSDiagram() string {
 	diagram := "stateDiagram-v2\n"
 	for from := uint(0); from < spec.stateCount; from++ {
 		for trigger := uint(0); trigger < spec.triggerCount; trigger++ {
@@ -408,26 +410,26 @@ func (spec *Spec[S, T, Payload]) MermaidJSDiagram() string {
 
 // Machine is a finite state machine (FSM) instance. It keeps track of its current state and uses the FSM specification
 // to determine valid state transitions and is the executor of defined transition actions and state hooks.
-type Machine[S, T ~uint, Payload any] struct {
+type Machine[S, T ~uint, Input any] struct {
 	state S
-	spec  Spec[S, T, Payload]
+	spec  Spec[S, T, Input]
 }
 
 // New creates a new FSM instance with the given specification and initial state.
-func New[S, T ~uint, Payload any](spec *Spec[S, T, Payload], initialState S) *Machine[S, T, Payload] {
-	return &Machine[S, T, Payload]{
+func New[S, T ~uint, Input any](spec *Spec[S, T, Input], initialState S) *Machine[S, T, Input] {
+	return &Machine[S, T, Input]{
 		spec:  *spec,
 		state: initialState,
 	}
 }
 
 // State returns the current state of the FSM.
-func (m *Machine[S, T, Payload]) State() S {
+func (m *Machine[S, T, Input]) State() S {
 	return m.state
 }
 
 // ActiveHierarchy returns the active hierarchy of states in the FSM.
-func (m *Machine[S, T, Payload]) ActiveHierarchy() []S {
+func (m *Machine[S, T, Input]) ActiveHierarchy() []S {
 	var hierarchy [maxDepth]S
 	i := m.readHierarchy(m.state, &hierarchy)
 	out := hierarchy[:i]
@@ -435,21 +437,22 @@ func (m *Machine[S, T, Payload]) ActiveHierarchy() []S {
 }
 
 // IsIn checks if the FSM is currently in the specified state.
-func (m *Machine[S, T, Payload]) IsIn(state S) bool {
+func (m *Machine[S, T, Input]) IsIn(state S) bool {
 	var hierarchy [maxDepth]S
 	i := m.readHierarchy(m.state, &hierarchy)
 	return slices.Contains(hierarchy[:i], state)
 }
 
-// Fire attempts to perform a state transition based on the provided trigger, payload and current state.
+// Fire attempts to perform a state transition based on the provided trigger, input and current state.
+// The trigger and input together form the stimuli that attempt to stimulate the FSM to move into another state.
 //
 // If a defined transition cannot be found for the current state, it will search up the state hierarchy for
 // a valid transition until one is found. If none is found, it will return an ErrNotFound error.
 //
 // If a transition is found but has a guard that rejects the transition, it will return an ErrTransitionRejected error.
-func (m *Machine[S, T, Payload]) Fire(ctx context.Context, trigger T, payload Payload) error {
+func (m *Machine[S, T, Input]) Fire(ctx context.Context, trigger T, input Input) error {
 	state := m.state
-	var transition Transition[S, Payload]
+	var transition Transition[S, Input]
 	for {
 		trans, err := m.findTransition(trigger, state)
 		if err != nil {
@@ -465,7 +468,7 @@ func (m *Machine[S, T, Payload]) Fire(ctx context.Context, trigger T, payload Pa
 
 		// Return an error if the guard rejects the transition.
 		if guard := trans.Guard; guard != nil {
-			if err := guard(payload); err != nil {
+			if err := guard(input); err != nil {
 				err = fmt.Errorf("rejecting transition from state (%v) to (%v) for trigger (%v): %w", state, trans.Next, trigger, err)
 				return errors.Join(ErrTransitionRejected, err)
 			}
@@ -508,7 +511,7 @@ outerLoop:
 		}
 		// Invoke the state's OnExit hook if it exists.
 		if onExit := m.spec.stateHooks[state].OnExit; onExit != nil {
-			if err := onExit(ctx, payload); err != nil {
+			if err := onExit(ctx, input); err != nil {
 				return fmt.Errorf("invoking OnExit state hook for state %v: %w", state, err)
 			}
 		}
@@ -516,7 +519,7 @@ outerLoop:
 
 	// Return an error if the transition's action fails.
 	if action := transition.Action; action != nil {
-		if err := action(ctx, payload); err != nil {
+		if err := action(ctx, input); err != nil {
 			return fmt.Errorf("invoking transition action from states (%v) to (%v): %w", state, transition.Next, err)
 		}
 	}
@@ -538,7 +541,7 @@ outerLoop:
 		}
 		// Invoke the state's OnEntry hook if it exists.
 		if onEntry := m.spec.stateHooks[state].OnEntry; onEntry != nil {
-			if err := onEntry(ctx, payload); err != nil {
+			if err := onEntry(ctx, input); err != nil {
 				return fmt.Errorf("invoking OnEntry state hook for state (%v): %w", state, err)
 			}
 		}
@@ -549,7 +552,7 @@ outerLoop:
 	if intialSubstate != nil {
 		// Invoke the state's OnEntry hook if it exists.
 		if onEntry := m.spec.stateHooks[*intialSubstate].OnEntry; onEntry != nil {
-			if err := onEntry(ctx, payload); err != nil {
+			if err := onEntry(ctx, input); err != nil {
 				return fmt.Errorf("invoking OnEntry state hook for state (%v): %w", *intialSubstate, err)
 			}
 		}
@@ -562,11 +565,12 @@ outerLoop:
 	return nil
 }
 
-// CanFire checks if a state transition can be made given the trigger, current state and the guard defined
-// for the transition. It returns true if the transition can be made, otherwise false.
+// CanFire checks if a state transition can be made given the trigger, input, current state and the guard defined
+// for the transition. The trigger and input together form the stimuli that would attempt to stimulate the FSM.
+// It returns true if the transition can be made, otherwise false.
 //
 // It will search up the state hierarchy for a valid transition until one is found or the root is reached.
-func (m *Machine[S, T, Payload]) CanFire(ctx context.Context, trigger T, payload Payload) bool {
+func (m *Machine[S, T, Input]) CanFire(ctx context.Context, trigger T, input Input) bool {
 	state := m.state
 	for {
 		trans, err := m.findTransition(trigger, state)
@@ -583,7 +587,7 @@ func (m *Machine[S, T, Payload]) CanFire(ctx context.Context, trigger T, payload
 
 		// Return an error if the guard rejects the transition.
 		if guard := trans.Guard; guard != nil {
-			if err := guard(payload); err != nil {
+			if err := guard(input); err != nil {
 				return false
 			}
 		}
@@ -592,16 +596,16 @@ func (m *Machine[S, T, Payload]) CanFire(ctx context.Context, trigger T, payload
 	return true
 }
 
-func (m *Machine[S, T, Payload]) findTransition(trigger T, state S) (Transition[S, Payload], error) {
+func (m *Machine[S, T, Input]) findTransition(trigger T, state S) (Transition[S, Input], error) {
 	transIdx := transitionIndex(state, trigger, m.spec.triggerCount)
 	trans := m.spec.transitions[transIdx]
 	if !trans.Valid {
-		return Transition[S, Payload]{}, ErrNotFound
+		return Transition[S, Input]{}, ErrNotFound
 	}
 	return trans, nil
 }
 
-func (m *Machine[S, T, Payload]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
+func (m *Machine[S, T, Input]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
 	var next *S = &fromState
 	i := 0
 	for ; next != nil && i < maxDepth; i++ {

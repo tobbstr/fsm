@@ -286,7 +286,7 @@ func (t orderTrigger) String() string {
 
 ### Basic Example with Dependency Injection
 
-The FSM library uses closure-based dependency injection to keep `Fire()` call sites clean. Infrastructure dependencies (database, services, logger) are captured via closures when defining the FSM specification, while business data is passed to each `Fire()` call.
+The FSM library uses closure-based dependency injection to keep `Fire()` call sites clean. Infrastructure dependencies (database, services, logger) are captured via closures when defining the FSM specification, while business data is passed to each `Fire()` call as part of the stimuli (trigger + input) that attempt to stimulate the FSM to transition.
 
 ```go
 import (
@@ -311,8 +311,8 @@ const (
     triggerShip
 )
 
-// OrderPayload contains per-transition business data (passed to each Fire call)
-type OrderPayload struct {
+// OrderInput contains per-transition business data (passed to each Fire call)
+type OrderInput struct {
     OrderID       int
     CustomerID    string
     CurrentStatus string
@@ -326,26 +326,26 @@ type Services struct {
 
 // Define the FSM specification. It should be stored in a global variable to avoid having to recreate it each time.
 // This is safe as the spec is read-only and thread-safe.
-func fsmSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderPayload] {
-    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderPayload](3, 2)
+func fsmSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderInput] {
+    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput](3, 2)
 
     builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
         // Guards are pure functions that check business rules (no side effects!)
-        WithGuard("status == paid", func(payload OrderPayload) error {
-            if payload.CurrentStatus != "paid" {
+        WithGuard("status == paid", func(input OrderInput) error {
+            if input.CurrentStatus != "paid" {
                 return fmt.Errorf("order must be paid before shipping")
             }
             return nil
         }).
         // Actions perform side effects using captured services
-        WithAction("update status and notify", func(ctx context.Context, payload OrderPayload) error {
+        WithAction("update status and notify", func(ctx context.Context, input OrderInput) error {
             // Services are captured from outer scope via closure
-            services.Logger.Printf("Shipping order %d", payload.OrderID)
+            services.Logger.Printf("Shipping order %d", input.OrderID)
             
-            if err := updateStatus(ctx, services.DB, payload.OrderID, "shipped"); err != nil {
+            if err := updateStatus(ctx, services.DB, input.OrderID, "shipped"); err != nil {
                 return fmt.Errorf("updating status: %w", err)
             }
-            if err := notifyShipped(ctx, services.DB, payload.CustomerID); err != nil {
+            if err := notifyShipped(ctx, services.DB, input.CustomerID); err != nil {
                 return fmt.Errorf("notifying customer: %w", err)
             }
             return nil
@@ -368,8 +368,9 @@ func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
     
     m := fsm.New(spec, stateFromString(order.Status))
     
-    // Clean Fire() call - only business data, no infrastructure dependencies!
-    if err := m.Fire(ctx, triggerShip, OrderPayload{
+    // Clean Fire() call - trigger and input together form the stimuli for the transition
+    // Only business data, no infrastructure dependencies!
+    if err := m.Fire(ctx, triggerShip, OrderInput{
         OrderID:       orderID,
         CustomerID:    order.CustomerID,
         CurrentStatus: order.Status,
@@ -410,17 +411,23 @@ func notifyShipped(ctx context.Context, db *sql.DB, customerID string) error {
 
 **Key Principles:**
 
-1. **Separate business data (payload) from infrastructure dependencies (services)**
-   - **Payload:** Per-transition business data passed to each `Fire()` call
+1. **Stimuli for state transitions**
+   - The **trigger** and **input** together form the stimuli that attempt to stimulate the FSM to move into another state
+   - The trigger identifies the type of event (e.g., "pay", "ship", "cancel")
+   - The input provides the context and data needed for the transition (e.g., order details, customer information)
+   - Together, they determine which transition to take and provide the necessary information for guards and actions
+
+2. **Separate business data (input) from infrastructure dependencies (services)**
+   - **Input:** Per-transition business data passed to each `Fire()` call as part of the stimuli
    - **Services:** Infrastructure dependencies (DB, logger, external APIs) captured via closures when defining the FSM spec
 
-2. **Guards must be pure functions (no side effects)**
-   - Guards should only validate data in the payload
+3. **Guards must be pure functions (no side effects)**
+   - Guards should only validate data in the input
    - All side effects (DB calls, logging, etc.) belong in Actions, not Guards
 
 ```go
 // ✅ Good: Clean separation of concerns
-type OrderPayload struct {
+type OrderInput struct {
     OrderID      int
     CustomerID   string
     Amount       float64
@@ -433,29 +440,29 @@ type Services struct {
     EmailSvc EmailService
 }
 
-func SetupFSM(services Services) *fsm.Spec[State, Trigger, OrderPayload] {
-    builder := fsm.NewSpecBuilder[State, Trigger, OrderPayload](numStates, numTriggers)
+func SetupFSM(services Services) *fsm.Spec[State, Trigger, OrderInput] {
+    builder := fsm.NewSpecBuilder[State, Trigger, OrderInput](numStates, numTriggers)
     
     builder.Transition().From(Pending).On(Confirm).To(Confirmed).
-        // Guards are pure - only check payload data
-        WithGuard("order is valid", func(payload OrderPayload) error {
-            if !payload.IsValidOrder || payload.Amount <= 0 {
+        // Guards are pure - only check input data
+        WithGuard("order is valid", func(input OrderInput) error {
+            if !input.IsValidOrder || input.Amount <= 0 {
                 return fmt.Errorf("invalid order")
             }
             return nil
         }).
         // Actions use services for side effects
-        WithAction("process order", func(ctx context.Context, payload OrderPayload) error {
+        WithAction("process order", func(ctx context.Context, input OrderInput) error {
             // Services captured via closure - clean and type-safe!
-            services.Logger.Printf("Processing order %d", payload.OrderID)
-            return services.DB.Exec(ctx, "UPDATE orders SET status = 'confirmed' WHERE id = ?", payload.OrderID)
+            services.Logger.Printf("Processing order %d", input.OrderID)
+            return services.DB.Exec(ctx, "UPDATE orders SET status = 'confirmed' WHERE id = ?", input.OrderID)
         })
     
     return builder.Build()
 }
 
 // Clean call site with only business data!
-machine.Fire(ctx, Confirm, OrderPayload{
+machine.Fire(ctx, Confirm, OrderInput{
     OrderID: 123, 
     CustomerID: "CUST-456", 
     Amount: 99.99,
@@ -473,11 +480,11 @@ order in which transitions are attempted, while the FSM checks business rules an
 ```go
 func (s *Service) RunOperationWithMultipleConditionalSteps(ctx context.Context, orderID int) error {
     // Gather necessary business data
-    payload := OrderPayload{OrderID: orderID, /* ... */}
+    input := OrderInput{OrderID: orderID, /* ... */}
     
     m := fsm.New(fsmSpec(), stateA)
     
-    err := m.Fire(ctx, triggerX, payload)
+    err := m.Fire(ctx, triggerX, input)
     if err == nil {
         return nil // The transition was successful
     }
@@ -487,7 +494,7 @@ func (s *Service) RunOperationWithMultipleConditionalSteps(ctx context.Context, 
     // Otherwise, the transition was rejected due to the guard function not passing
 
     // Try another transition
-    err = m.Fire(ctx, triggerY, payload)
+    err = m.Fire(ctx, triggerY, input)
     if err == nil {
         return nil // The transition was successful
     }
@@ -496,7 +503,7 @@ func (s *Service) RunOperationWithMultipleConditionalSteps(ctx context.Context, 
     }
     
     // Final attempt
-    if err = m.Fire(ctx, triggerZ, payload); err != nil {
+    if err = m.Fire(ctx, triggerZ, input); err != nil {
         return fmt.Errorf("attempting final transition: %w", err)
     }
     return nil
@@ -514,8 +521,8 @@ Build it once at application startup and reuse it across goroutines.
 // Build once, typically in a package-level variable or during initialization
 var orderFSMSpec = buildOrderFSMSpec(services)
 
-func buildOrderFSMSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderPayload] {
-    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderPayload](3, 2)
+func buildOrderFSMSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderInput] {
+    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput](3, 2)
     // ... define transitions and states with services captured via closure ...
     return builder.Build()
 }
@@ -532,19 +539,19 @@ machine := fsm.New(orderFSMSpec, order.CurrentState)
 
 ### Guards
 
-Guards are **pure functions** that implement business rules. They determine whether a transition is allowed based solely on the payload data.
+Guards are **pure functions** that implement business rules. They determine whether a transition is allowed based solely on the input data.
 
 **Important Principles:**
 - ✅ Guards should be **side-effect free** (no database calls, no API calls, no logging, no mutations)
-- ✅ Guards should only validate data in the payload
+- ✅ Guards should only validate data in the input
 - ✅ Guards return `error`: return `nil` to allow the transition, or any error to reject it
 - ❌ Guards should **NOT** access services or perform I/O operations
 
 ```go
-// ✅ Good: Pure guard checking only payload data
+// ✅ Good: Pure guard checking only input data
 builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-    WithGuard("inventory available", func(payload OrderPayload) error {
-        if payload.InventoryCount < payload.OrderQuantity {
+    WithGuard("inventory available", func(input OrderInput) error {
+        if input.InventoryCount < input.OrderQuantity {
             return fmt.Errorf("insufficient inventory")
         }
         return nil // Allow transition
@@ -552,10 +559,10 @@ builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
 
 // ❌ Bad: Guard with side effects (database call)
 builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-    WithGuard("inventory check", func(payload OrderPayload) error {
+    WithGuard("inventory check", func(input OrderInput) error {
         // DON'T DO THIS! Guards should be pure functions
-        count, err := services.DB.QueryInventory(payload.ProductID)
-        if err != nil || count < payload.Quantity {
+        count, err := services.DB.QueryInventory(input.ProductID)
+        if err != nil || count < input.Quantity {
             return fmt.Errorf("insufficient inventory")
         }
         return nil
@@ -575,9 +582,9 @@ Actions perform side effects during transitions, such as database updates or ext
 ```go
 // Assuming services is captured from outer scope
 builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-    WithAction("ship order", func(ctx context.Context, payload OrderPayload) error {
+    WithAction("ship order", func(ctx context.Context, input OrderInput) error {
         // services.ShippingService is captured via closure
-        return services.ShippingService.CreateShipment(ctx, payload.OrderID)
+        return services.ShippingService.CreateShipment(ctx, input.OrderID)
     })
 ```
 
@@ -590,15 +597,15 @@ States can have `OnEntry` and `OnExit` hooks that run when entering or leaving a
 ```go
 // Assuming services is captured from outer scope
 builder.State(stateShipped).
-    OnEntry(func(ctx context.Context, payload OrderPayload) error {
+    OnEntry(func(ctx context.Context, input OrderInput) error {
         // Called when entering the "shipped" state
         // services.Analytics is captured via closure
-        return services.Analytics.TrackEvent(ctx, "order_shipped", payload.OrderID)
+        return services.Analytics.TrackEvent(ctx, "order_shipped", input.OrderID)
     }).
-    OnExit(func(ctx context.Context, payload OrderPayload) error {
+    OnExit(func(ctx context.Context, input OrderInput) error {
         // Called when leaving the "shipped" state
         // services.Cache is captured via closure
-        return services.Cache.Invalidate(ctx, payload.OrderID)
+        return services.Cache.Invalidate(ctx, input.OrderID)
     })
 ```
 
@@ -617,7 +624,7 @@ Hierarchical states allow you to model complex state machines with parent-child 
 ### Defining Hierarchies
 
 ```go
-builder := fsm.NewSpecBuilder[state, trigger, payload](6, 2)
+builder := fsm.NewSpecBuilder[state, trigger, input](6, 2)
 
 // Define parent-child relationships
 builder.State(stateChild).Parent(stateParent)
@@ -636,7 +643,7 @@ builder.Transition().From(stateParent).On(triggerX).To(stateOther)
 machine := fsm.New(spec, stateGrandchild)
 
 // Trigger bubbles up: grandchild -> child -> parent (transition found!)
-machine.Fire(ctx, triggerX, payload) // Successfully transitions from parent to stateOther
+machine.Fire(ctx, triggerX, input) // Successfully transitions from parent to stateOther
 ```
 
 ### Initial Substates
@@ -650,7 +657,7 @@ builder.State(stateDefaultChild).Parent(stateParent)
 builder.Transition().From(stateA).On(triggerX).To(stateParent)
 
 machine := fsm.New(spec, stateA)
-machine.Fire(ctx, triggerX, payload)
+machine.Fire(ctx, triggerX, input)
 // Machine is now in stateDefaultChild (not stateParent)
 ```
 
@@ -690,7 +697,7 @@ fmt.Printf("Current state: %v\n", currentState)
 Checks if a transition can be made without actually performing it:
 
 ```go
-if machine.CanFire(ctx, triggerShip, payload) {
+if machine.CanFire(ctx, triggerShip, input) {
     fmt.Println("Can ship the order")
 } else {
     fmt.Println("Cannot ship the order yet")
@@ -731,7 +738,7 @@ The library provides two sentinel errors for common scenarios:
 Returned when a guard function rejects a transition:
 
 ```go
-err := machine.Fire(ctx, trigger, payload)
+err := machine.Fire(ctx, trigger, input)
 if errors.Is(err, fsm.ErrTransitionRejected) {
     // Guard rejected the transition - business rules not met
     fmt.Println("Transition not allowed at this time")
@@ -743,7 +750,7 @@ if errors.Is(err, fsm.ErrTransitionRejected) {
 Returned when no valid transition exists for the current state and trigger:
 
 ```go
-err := machine.Fire(ctx, trigger, payload)
+err := machine.Fire(ctx, trigger, input)
 if errors.Is(err, fsm.ErrNotFound) {
     // No transition defined for this state-trigger combination
     fmt.Println("Invalid operation for current state")
@@ -780,30 +787,30 @@ See [fsm.go](fsm.go) for full API documentation and comments.
 
 ### Main Types
 
-- `Spec[S, T, Payload]` - Thread-safe FSM specification
-- `Machine[S, T, Payload]` - FSM instance with current state
-- `Guard[Payload]` - Function type for transition guards: `func(payload Payload) error`
-- `Action[Payload]` - Function type for transition actions and state hooks: `func(ctx context.Context, payload Payload) error`
+- `Spec[S, T, Input]` - Thread-safe FSM specification
+- `Machine[S, T, Input]` - FSM instance with current state
+- `Guard[Input]` - Function type for transition guards: `func(input Input) error`
+- `Action[Input]` - Function type for transition actions and state hooks: `func(ctx context.Context, input Input) error`
 
 ### Builder API
 
-- `NewSpecBuilder[S, T, Payload](numStates, numTriggers uint)` - Create a new spec builder
+- `NewSpecBuilder[S, T, Input](numStates, numTriggers uint)` - Create a new spec builder
 - `.Transition().From(S).On(T).To(S)` - Define a transition
-- `.WithGuard(desc string, guard Guard[Payload])` - Add a guard to a transition
-- `.WithAction(desc string, action Action[Payload])` - Add an action to a transition
+- `.WithGuard(desc string, guard Guard[Input])` - Add a guard to a transition
+- `.WithAction(desc string, action Action[Input])` - Add an action to a transition
 - `.State(S)` - Configure a state
-- `.OnEntry(action Action[Payload])` - Add an entry hook to a state
-- `.OnExit(action Action[Payload])` - Add an exit hook to a state
+- `.OnEntry(action Action[Input])` - Add an entry hook to a state
+- `.OnExit(action Action[Input])` - Add an exit hook to a state
 - `.Parent(S)` - Set parent state for hierarchical FSMs
 - `.Initial(S)` - Set initial substate for hierarchical FSMs
 - `.Build()` - Build the FSM specification
 
 ### Machine API
 
-- `New[S, T, Payload](spec *Spec, initialState S)` - Create a new FSM instance
-- `.Fire(ctx, trigger, payload)` - Attempt a state transition
+- `New[S, T, Input](spec *Spec, initialState S)` - Create a new FSM instance
+- `.Fire(ctx, trigger, input)` - Attempt a state transition. The trigger and input together form the stimuli that attempt to stimulate the FSM to move into another state.
 - `.State()` - Get current state
-- `.CanFire(ctx, trigger, payload)` - Check if transition is possible
+- `.CanFire(ctx, trigger, input)` - Check if transition is possible. The trigger and input together form the stimuli that would attempt to stimulate the FSM.
 - `.IsIn(state)` - Check if FSM is in state (including hierarchy)
 - `.ActiveHierarchy()` - Get active state hierarchy
 
