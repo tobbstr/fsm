@@ -502,7 +502,7 @@ func (m *Machine[S, T, Input]) IsIn(state S) bool {
 // If a transition is found but has a guard that rejects the transition, it will return an ErrTransitionRejected error.
 func (m *Machine[S, T, Input]) Fire(ctx context.Context, trigger T, input Input) error {
 	state := m.state
-	var transition Transition[S, Input]
+	var transition *Transition[S, Input]
 	for {
 		trans, err := m.findTransition(trigger, state)
 		if err != nil {
@@ -646,17 +646,19 @@ func (m *Machine[S, T, Input]) CanFire(ctx context.Context, trigger T, input Inp
 	return true
 }
 
-func (m *Machine[S, T, Input]) findTransition(trigger T, state S) (Transition[S, Input], error) {
+// findTransition returns a pointer to the matching transition in the (read-only) spec, avoiding a copy of the
+// Transition struct on the hot path. The returned pointer must not be mutated.
+func (m *Machine[S, T, Input]) findTransition(trigger T, state S) (*Transition[S, Input], error) {
 	// The specification is sized to the highest state and trigger index referenced when it was built. A state or
 	// trigger beyond those bounds simply has no defined transition, so report it as not found instead of indexing
 	// out of range.
 	if uint(state) >= m.spec.stateCount || uint(trigger) >= m.spec.triggerCount {
-		return Transition[S, Input]{}, ErrNotFound
+		return nil, ErrNotFound
 	}
 	transIdx := transitionIndex(state, trigger, m.spec.triggerCount)
-	trans := m.spec.transitions[transIdx]
+	trans := &m.spec.transitions[transIdx]
 	if !trans.Valid {
-		return Transition[S, Input]{}, ErrNotFound
+		return nil, ErrNotFound
 	}
 	return trans, nil
 }
