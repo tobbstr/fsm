@@ -327,7 +327,7 @@ type Services struct {
 // Define the FSM specification. It should be stored in a global variable to avoid having to recreate it each time.
 // This is safe as the spec is read-only and thread-safe.
 func fsmSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderInput] {
-    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput](3, 2)
+    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput]()
 
     builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
         // Guards are pure functions that check business rules (no side effects!)
@@ -441,7 +441,7 @@ type Services struct {
 }
 
 func SetupFSM(services Services) *fsm.Spec[State, Trigger, OrderInput] {
-    builder := fsm.NewSpecBuilder[State, Trigger, OrderInput](numStates, numTriggers)
+    builder := fsm.NewSpecBuilder[State, Trigger, OrderInput]()
     
     builder.Transition().From(Pending).On(Confirm).To(Confirmed).
         // Guards are pure - only check input data
@@ -522,7 +522,7 @@ Build it once at application startup and reuse it across goroutines.
 var orderFSMSpec = buildOrderFSMSpec(services)
 
 func buildOrderFSMSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderInput] {
-    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput](3, 2)
+    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput]()
     // ... define transitions and states with services captured via closure ...
     return builder.Build()
 }
@@ -624,7 +624,7 @@ Hierarchical states allow you to model complex state machines with parent-child 
 ### Defining Hierarchies
 
 ```go
-builder := fsm.NewSpecBuilder[state, trigger, input](6, 2)
+builder := fsm.NewSpecBuilder[state, trigger, input]()
 
 // Define parent-child relationships
 builder.State(stateChild).Parent(stateParent)
@@ -794,7 +794,7 @@ See [fsm.go](fsm.go) for full API documentation and comments.
 
 ### Builder API
 
-- `NewSpecBuilder[S, T, Input](numStates, numTriggers uint)` - Create a new spec builder
+- `NewSpecBuilder[S, T, Input]()` - Create a new spec builder (the number of states and triggers is derived automatically at `Build()` time)
 - `.Transition().From(S).On(T).To(S)` - Define a transition
 - `.WithGuard(desc string, guard Guard[Input])` - Add a guard to a transition
 - `.WithAction(desc string, action Action[Input])` - Add an action to a transition

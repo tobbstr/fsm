@@ -25,7 +25,7 @@
 //	}
 //
 //	// Create a new FSM specification builder.
-//	builder := fsm.NewSpecBuilder[State, Trigger, OrderInput](numStates, numTriggers)
+//	builder := fsm.NewSpecBuilder[State, Trigger, OrderInput]()
 //
 //	// Define transitions and state hooks.
 //	builder.Transition().From(...).On(...).To(...).WithAction(...).WithGuard(...)
@@ -53,7 +53,7 @@
 //
 //	// Create spec with services captured via closure.
 //	func SetupOrderFSM(services Services) *fsm.Spec[State, Trigger, OrderInput] {
-//		builder := fsm.NewSpecBuilder[State, Trigger, OrderInput](numStates, numTriggers)
+//		builder := fsm.NewSpecBuilder[State, Trigger, OrderInput]()
 //
 //		// Services are captured from outer scope.
 //		builder.Transition().
@@ -132,19 +132,12 @@ type specBuilder[S, T ~uint, Input any] struct {
 
 // NewSpecBuilder creates a new specBuilder used for building FSM specifications which define the states, triggers
 // and transitions in the FSM.
-func NewSpecBuilder[S, T ~uint, Input any](numStates, numTriggers uint) *specBuilder[S, T, Input] {
-	if numStates == 0 || numTriggers == 0 {
-		panic("number of states and triggers must be greater than zero")
-	}
-
-	return &specBuilder[S, T, Input]{
-		stateCount:    numStates,
-		triggerCount:  numTriggers,
-		transitions:   make([]Transition[S, Input], numStates*numTriggers),
-		stateHooks:    make([]StateHooks[Input], numStates),
-		stateParents:  make([]*S, numStates),
-		initialStates: make([]*S, numStates),
-	}
+//
+// The number of states and triggers is derived automatically from the definitions added to the builder, so there is
+// no need to declare them up front. Build() sizes the specification to fit the highest state and trigger index
+// referenced by any transition or state definition.
+func NewSpecBuilder[S, T ~uint, Input any]() *specBuilder[S, T, Input] {
+	return &specBuilder[S, T, Input]{}
 }
 
 // Transition begins the definition of a new transition.
@@ -170,6 +163,39 @@ func (b *specBuilder[S, T, Input]) Build() *Spec[S, T, Input] {
 	if b.numTransitionDefinitionsStarted != len(b.transitionToBuilders) {
 		panic("not all transition definitions were completed")
 	}
+
+	// Derive the FSM's dimensions from the definitions provided. The specification is sized to fit the highest
+	// state and trigger index referenced by any transition or state definition, removing the need for the caller
+	// to declare the counts up front.
+	var maxState, maxTrigger uint
+	noteState := func(s S) {
+		if uint(s) > maxState {
+			maxState = uint(s)
+		}
+	}
+	for _, tb := range b.transitionToBuilders {
+		noteState(tb.from)
+		noteState(tb.to)
+		if uint(tb.trigger) > maxTrigger {
+			maxTrigger = uint(tb.trigger)
+		}
+	}
+	for _, sb := range b.stateBuilders {
+		noteState(sb.state)
+		if sb.isParentSet {
+			noteState(sb.parent)
+		}
+		if sb.isInitialStateSet {
+			noteState(sb.initialState)
+		}
+	}
+	b.stateCount = maxState + 1
+	b.triggerCount = maxTrigger + 1
+	b.transitions = make([]Transition[S, Input], b.stateCount*b.triggerCount)
+	b.stateHooks = make([]StateHooks[Input], b.stateCount)
+	b.stateParents = make([]*S, b.stateCount)
+	b.initialStates = make([]*S, b.stateCount)
+
 	// Ensure all transition definitions are finalized and added to the FSM model by calling done() on
 	// each transition builder.
 	for _, tb := range b.transitionToBuilders {
@@ -597,6 +623,12 @@ func (m *Machine[S, T, Input]) CanFire(ctx context.Context, trigger T, input Inp
 }
 
 func (m *Machine[S, T, Input]) findTransition(trigger T, state S) (Transition[S, Input], error) {
+	// The specification is sized to the highest state and trigger index referenced when it was built. A state or
+	// trigger beyond those bounds simply has no defined transition, so report it as not found instead of indexing
+	// out of range.
+	if uint(state) >= m.spec.stateCount || uint(trigger) >= m.spec.triggerCount {
+		return Transition[S, Input]{}, ErrNotFound
+	}
 	transIdx := transitionIndex(state, trigger, m.spec.triggerCount)
 	trans := m.spec.transitions[transIdx]
 	if !trans.Valid {
@@ -606,11 +638,21 @@ func (m *Machine[S, T, Input]) findTransition(trigger T, state S) (Transition[S,
 }
 
 func (m *Machine[S, T, Input]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
-	var next *S = &fromState
+	state := fromState
 	i := 0
-	for ; next != nil && i < maxDepth; i++ {
-		(*hierarchy)[i] = *next
-		next = m.spec.stateParents[*next]
+	for i < maxDepth {
+		(*hierarchy)[i] = state
+		i++
+		// A state beyond the specification's bounds has no recorded parent, so stop climbing rather than indexing
+		// out of range.
+		if uint(state) >= m.spec.stateCount {
+			break
+		}
+		parent := m.spec.stateParents[state]
+		if parent == nil {
+			break
+		}
+		state = *parent
 	}
 	return i
 }

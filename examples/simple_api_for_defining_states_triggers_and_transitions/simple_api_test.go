@@ -76,8 +76,9 @@ func TestSimpleAPI(t *testing.T) {
 	}
 
 	// Constructs a new FSM specification builder.
-	// Note: Only 3 type parameters now (state, trigger, OrderInput)
-	builder := fsm.NewSpecBuilder[state, trigger, OrderInput](3, 1) // 3 states, 1 trigger
+	// Note: Only 3 type parameters (state, trigger, OrderInput); the number of states and triggers is derived
+	// automatically from the definitions below.
+	builder := fsm.NewSpecBuilder[state, trigger, OrderInput]()
 
 	// Define transition from red to yellow.
 	builder.Transition().

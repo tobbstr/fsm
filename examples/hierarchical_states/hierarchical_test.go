@@ -78,7 +78,7 @@ func TestHierarchicalStates(t *testing.T) {
 	// and then down to the target state (Grandchild B). On the way up the states' OnExit hooks will be called and on
 	// the way down the OnEntry hooks will be called.
 
-	builder := fsm.NewSpecBuilder[state, trigger, input](6, 1) // 6 states, 1 trigger
+	builder := fsm.NewSpecBuilder[state, trigger, input]() // states and triggers derived automatically
 
 	// Hierarchy setup
 	builder.State(Parent).Parent(Root)

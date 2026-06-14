@@ -68,7 +68,7 @@ const (
 type dummyInput struct{}
 
 func setupBenchmarkFSM() *Machine[uint, uint, dummyInput] {
-	builder := NewSpecBuilder[uint, uint, dummyInput](26, 26)
+	builder := NewSpecBuilder[uint, uint, dummyInput]()
 	builder.Transition().From(stateA).On(triggerA).To(stateB)
 	builder.Transition().From(stateB).On(triggerA).To(stateC)
 	builder.Transition().From(stateC).On(triggerA).To(stateD)
