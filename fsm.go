@@ -223,6 +223,22 @@ func (b *specBuilder[S, T, Input]) Build() *Spec[S, T, Input] {
 		}
 	}
 
+	// Ensure no state hierarchy is deeper than maxDepth. readHierarchy uses a fixed-size stack array to stay
+	// zero-allocation, so a deeper chain would be silently truncated and its OnEntry/OnExit hooks skipped. The
+	// same walk also catches cycles in the parent definitions, which would otherwise produce an unbounded chain.
+	for s := uint(0); s < b.stateCount; s++ {
+		depth := 1
+		for parent := b.stateParents[s]; parent != nil; parent = b.stateParents[*parent] {
+			depth++
+			if depth > maxDepth {
+				panic(fmt.Sprintf(
+					"state hierarchy starting at state (%v) exceeds the maximum supported depth of %d (check for an overly deep hierarchy or a cycle in the parent definitions)",
+					S(s), maxDepth,
+				))
+			}
+		}
+	}
+
 	return &Spec[S, T, Input]{
 		stateCount:    b.stateCount,
 		triggerCount:  b.triggerCount,

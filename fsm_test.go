@@ -128,6 +128,31 @@ func TestBuild_DerivesDimensions(t *testing.T) {
 		})
 	}
 }
+
+// TestBuild_ValidatesHierarchyDepth verifies that Build() accepts a hierarchy at the maximum supported depth and
+// panics on one that exceeds it (which would otherwise be silently truncated by readHierarchy).
+func TestBuild_ValidatesHierarchyDepth(t *testing.T) {
+	// buildChain returns a function that builds a spec with a single parent chain `levels` states deep:
+	// state(0) <- state(1) <- ... <- state(levels-1).
+	buildChain := func(levels int) func() {
+		return func() {
+			b := NewSpecBuilder[state, trigger, input]()
+			for i := 1; i < levels; i++ {
+				b.State(state(i)).Parent(state(i - 1))
+			}
+			b.Build()
+		}
+	}
+
+	t.Run("allows a hierarchy at the maximum supported depth", func(t *testing.T) {
+		require.NotPanics(t, buildChain(maxDepth))
+	})
+
+	t.Run("panics when a hierarchy exceeds the maximum supported depth", func(t *testing.T) {
+		require.Panics(t, buildChain(maxDepth+1))
+	})
+}
+
 func TestSpecBuilder_Transition(t *testing.T) {
 	// Test Types
 	type (
