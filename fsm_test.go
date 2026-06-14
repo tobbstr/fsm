@@ -258,6 +258,18 @@ func TestSpecBuilder_Build(t *testing.T) {
 			},
 		},
 		{
+			name: "panics when a duplicate transition is defined for the same from state and trigger",
+			given: given{
+				configure: func(b *specBuilder[state, trigger, input], o outputs) {
+					b.Transition().From(unlocked).On(lock).To(locked)
+					b.Transition().From(unlocked).On(lock).To(unlocked)
+				},
+			},
+			want: want{
+				panic: true,
+			},
+		},
+		{
 			name: "panics when incomplete transition is defined 2",
 			given: given{
 				configure: func(b *specBuilder[state, trigger, input], o outputs) {

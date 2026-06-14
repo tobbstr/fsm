@@ -331,6 +331,14 @@ func (tb *transitionToBuilder[S, T, Input]) WithAction(desc string, action Actio
 
 func (tb *transitionToBuilder[S, T, Input]) done() *specBuilder[S, T, Input] {
 	idx := transitionIndex(tb.from, tb.trigger, tb.b.triggerCount)
+	// Each (from, trigger) pair maps to a single transition. Defining a second one would silently overwrite the
+	// first, so fail loudly at build time instead.
+	if existing := tb.b.transitions[idx]; existing.Valid {
+		panic(fmt.Sprintf(
+			"duplicate transition: from state (%v) on trigger (%v) is already defined (to %v); cannot redefine (to %v)",
+			tb.from, tb.trigger, existing.Next, tb.to,
+		))
+	}
 	tb.b.transitions[idx] = Transition[S, Input]{
 		Valid:             true,
 		Next:              tb.to,
