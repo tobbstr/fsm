@@ -68,33 +68,33 @@ const (
 type dummyInput struct{}
 
 func setupBenchmarkFSM() *Machine[uint, uint, dummyInput] {
-	builder := NewSpecBuilder[uint, uint, dummyInput]()
-	builder.Transition().From(stateA).On(triggerA).To(stateB)
-	builder.Transition().From(stateB).On(triggerA).To(stateC)
-	builder.Transition().From(stateC).On(triggerA).To(stateD)
-	builder.Transition().From(stateD).On(triggerA).To(stateE)
-	builder.Transition().From(stateE).On(triggerA).To(stateF)
-	builder.Transition().From(stateF).On(triggerA).To(stateG)
-	builder.Transition().From(stateG).On(triggerA).To(stateH)
-	builder.Transition().From(stateH).On(triggerA).To(stateI)
-	builder.Transition().From(stateI).On(triggerA).To(stateJ)
-	builder.Transition().From(stateJ).On(triggerA).To(stateK)
-	builder.Transition().From(stateK).On(triggerA).To(stateL)
-	builder.Transition().From(stateL).On(triggerA).To(stateM)
-	builder.Transition().From(stateM).On(triggerA).To(stateN)
-	builder.Transition().From(stateN).On(triggerA).To(stateO)
-	builder.Transition().From(stateO).On(triggerA).To(stateP)
-	builder.Transition().From(stateP).On(triggerA).To(stateQ)
-	builder.Transition().From(stateQ).On(triggerA).To(stateR)
-	builder.Transition().From(stateR).On(triggerA).To(stateS)
-	builder.Transition().From(stateS).On(triggerA).To(stateT)
-	builder.Transition().From(stateT).On(triggerA).To(stateU)
-	builder.Transition().From(stateU).On(triggerA).To(stateV)
-	builder.Transition().From(stateV).On(triggerA).To(stateW)
-	builder.Transition().From(stateW).On(triggerA).To(stateX)
-	builder.Transition().From(stateX).On(triggerA).To(stateY)
-	builder.Transition().From(stateY).On(triggerA).To(stateZ)
-	builder.Transition().From(stateZ).On(triggerA).To(stateA) // Loop back to A
+	builder := NewBuilder[uint, uint, dummyInput]()
+	builder.From(stateA).On(triggerA).To(stateB)
+	builder.From(stateB).On(triggerA).To(stateC)
+	builder.From(stateC).On(triggerA).To(stateD)
+	builder.From(stateD).On(triggerA).To(stateE)
+	builder.From(stateE).On(triggerA).To(stateF)
+	builder.From(stateF).On(triggerA).To(stateG)
+	builder.From(stateG).On(triggerA).To(stateH)
+	builder.From(stateH).On(triggerA).To(stateI)
+	builder.From(stateI).On(triggerA).To(stateJ)
+	builder.From(stateJ).On(triggerA).To(stateK)
+	builder.From(stateK).On(triggerA).To(stateL)
+	builder.From(stateL).On(triggerA).To(stateM)
+	builder.From(stateM).On(triggerA).To(stateN)
+	builder.From(stateN).On(triggerA).To(stateO)
+	builder.From(stateO).On(triggerA).To(stateP)
+	builder.From(stateP).On(triggerA).To(stateQ)
+	builder.From(stateQ).On(triggerA).To(stateR)
+	builder.From(stateR).On(triggerA).To(stateS)
+	builder.From(stateS).On(triggerA).To(stateT)
+	builder.From(stateT).On(triggerA).To(stateU)
+	builder.From(stateU).On(triggerA).To(stateV)
+	builder.From(stateV).On(triggerA).To(stateW)
+	builder.From(stateW).On(triggerA).To(stateX)
+	builder.From(stateX).On(triggerA).To(stateY)
+	builder.From(stateY).On(triggerA).To(stateZ)
+	builder.From(stateZ).On(triggerA).To(stateA) // Loop back to A
 	spec := builder.Build()
 	return New(spec, stateA)
 }
@@ -102,6 +102,38 @@ func setupBenchmarkFSM() *Machine[uint, uint, dummyInput] {
 func BenchmarkFire(b *testing.B) {
 	ctx := context.Background()
 	fsm := setupBenchmarkFSM()
+	input := dummyInput{}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = fsm.Fire(ctx, triggerA, input)
+	}
+}
+
+func BenchmarkFire_SingleConditional(b *testing.B) {
+	ctx := context.Background()
+	builder := NewBuilder[uint, uint, dummyInput]()
+	builder.From(stateA).On(triggerA).To(stateB).When("always true", func(dummyInput) bool { return true })
+	builder.From(stateB).On(triggerA).To(stateA)
+	fsm := New(builder.Build(), stateA)
+	input := dummyInput{}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = fsm.Fire(ctx, triggerA, input)
+	}
+}
+
+func BenchmarkFire_Branching(b *testing.B) {
+	ctx := context.Background()
+	builder := NewBuilder[uint, uint, dummyInput]()
+	// 3 branches: first two have conditions that return false, last one is Otherwise (unconditional).
+	builder.From(stateA).On(triggerA).
+		To(stateB).When("false1", func(dummyInput) bool { return false }).
+		To(stateC).When("false2", func(dummyInput) bool { return false }).
+		Otherwise(stateD)
+	builder.From(stateB).On(triggerA).To(stateA)
+	builder.From(stateC).On(triggerA).To(stateA)
+	builder.From(stateD).On(triggerA).To(stateA)
+	fsm := New(builder.Build(), stateA)
 	input := dummyInput{}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
