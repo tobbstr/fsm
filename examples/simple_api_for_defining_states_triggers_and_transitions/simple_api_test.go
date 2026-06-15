@@ -78,41 +78,41 @@ func TestSimpleAPI(t *testing.T) {
 	// Constructs a new FSM specification builder.
 	// Note: Only 3 type parameters (state, trigger, OrderInput); the number of states and triggers is derived
 	// automatically from the definitions below.
-	builder := fsm.NewSpecBuilder[state, trigger, OrderInput]()
+	builder := fsm.NewBuilder[state, trigger, OrderInput]()
 
 	// Define transition from red to yellow.
-	builder.Transition().
-		From(red).     // The state from which this transition is valid.
-		On(next).      // The trigger that causes the transition.
-		To(yellow).    // The state to transition to.
-		WithAction("transitionToYellow", func(ctx context.Context, input OrderInput) error { // The action to perform during the transition.
+	builder.
+		From(red).    // The state from which this transition is valid.
+		On(next).     // The trigger that causes the transition.
+		To(yellow).   // The state to transition to.
+		Do("transitionToYellow", func(ctx context.Context, input OrderInput) error { // The action to perform during the transition.
 			// Services are captured from outer scope via Go closures.
 			// This keeps the Fire() call site clean!
 			_ = services // In a real app, you'd use: services.Logger.Printf(...), services.DB.Exec(...)
 			fmt.Printf("Transitioning order %s from red to yellow\n", input.OrderID)
 			return nil
 		}).
-		WithGuard("no-op", func(input OrderInput) error { // The guard to check before allowing transition.
-			// Services can also be accessed in guards via closure.
+		When("no-op", func(input OrderInput) bool { // The condition to check before allowing transition.
+			// Services can also be accessed in conditions via closure.
 			_ = services
 			fmt.Printf("Protecting the transition for order %s from red to yellow\n", input.OrderID)
-			return nil // Returning an error will disallow the transition.
+			return true
 		})
 
 	// Define transition from yellow to green.
-	builder.Transition().
+	builder.
 		From(yellow).
 		On(next).
 		To(green).
-		WithAction("transitionToGreen", func(ctx context.Context, input OrderInput) error {
+		Do("transitionToGreen", func(ctx context.Context, input OrderInput) error {
 			_ = services
 			fmt.Printf("Transitioning order %s from yellow to green\n", input.OrderID)
 			return nil
 		}).
-		WithGuard("no-op", func(input OrderInput) error {
+		When("no-op", func(input OrderInput) bool {
 			_ = services
 			fmt.Printf("Protecting the transition for order %s from yellow to green\n", input.OrderID)
-			return nil
+			return true
 		})
 
 	// Define state hooks for red.
@@ -170,7 +170,7 @@ func TestSimpleAPI(t *testing.T) {
 	// Notice: We only pass business data (OrderInput), not services/infrastructure.
 	currentState := m.State() // returns red
 	fmt.Printf("Current state: %s\n", currentState)
-	
+
 	// Clean Fire() call - only business input, no DB/Logger/Services!
 	err := m.Fire(context.Background(), next, OrderInput{
 		OrderID:    "ORD-123",
@@ -181,7 +181,7 @@ func TestSimpleAPI(t *testing.T) {
 
 	currentState = m.State() // returns yellow
 	fmt.Printf("Current state: %s\n", currentState)
-	
+
 	// Another clean Fire() call
 	err = m.Fire(context.Background(), next, OrderInput{
 		OrderID:    "ORD-123",

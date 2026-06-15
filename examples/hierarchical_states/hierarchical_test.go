@@ -78,7 +78,7 @@ func TestHierarchicalStates(t *testing.T) {
 	// and then down to the target state (Grandchild B). On the way up the states' OnExit hooks will be called and on
 	// the way down the OnEntry hooks will be called.
 
-	builder := fsm.NewSpecBuilder[state, trigger, input]() // states and triggers derived automatically
+	builder := fsm.NewBuilder[state, trigger, input]() // states and triggers derived automatically
 
 	// Hierarchy setup
 	builder.State(Parent).Parent(Root)
@@ -88,17 +88,17 @@ func TestHierarchicalStates(t *testing.T) {
 	builder.State(GrandchildB).Parent(ChildB)
 
 	// Sole transition: GrandchildA -> GrandchildB
-	builder.Transition().
+	builder.
 		From(GrandchildA).
 		On(ChangeFocus).
 		To(GrandchildB).
-		WithAction("printTransition()", func(ctx context.Context, p input) error {
+		Do("printTransition()", func(ctx context.Context, p input) error {
 			fmt.Println("Transitioning from GrandchildA to GrandchildB")
 			return nil
 		}).
-		WithGuard("no-op", func(p input) error {
-			fmt.Println("Guarding transition from GrandchildA to GrandchildB")
-			return nil
+		When("no-op", func(p input) bool {
+			fmt.Println("Checking transition from GrandchildA to GrandchildB")
+			return true
 		})
 
 	// State hooks for all states

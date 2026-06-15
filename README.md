@@ -9,7 +9,8 @@ A lightweight, idiomatic, and extensible Finite State Machine (FSM) library for 
 
 - [**Simple API** — define states, triggers, and transitions with ease](./examples/simple_api_for_defining_states_triggers_and_transitions/simple_api_test.go)
 - [**Side effects made easy** — run actions automatically during state transitions](./examples/simple_api_for_defining_states_triggers_and_transitions/simple_api_test.go)
-- [**Fine-grained control** — guard transitions with custom conditions](./examples/simple_api_for_defining_states_triggers_and_transitions/simple_api_test.go)
+- [**Fine-grained control** — guard transitions with boolean conditions](./examples/simple_api_for_defining_states_triggers_and_transitions/simple_api_test.go)
+- **Multiple guarded branches** — define several candidate transitions per `(state, trigger)` with first-match-wins semantics and an optional unconditional `Otherwise` fallback
 - [**Flexible states** — add your own OnEntry and OnExit hooks](./examples/simple_api_for_defining_states_triggers_and_transitions/simple_api_test.go)
 - [**Hierarchical states** — scale from simple to complex with nested state logic](./examples/hierarchical_states/hierarchical_test.go)
     - Supports up to 10 levels of nested sub-states
@@ -23,14 +24,15 @@ A lightweight, idiomatic, and extensible Finite State Machine (FSM) library for 
       - Number of triggers: 26
 
     goos: darwin
-    goarch: amd64
+    goarch: arm64
     pkg: github.com/tobbstr/fsm
-    cpu: Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz
-    BenchmarkFire
-    BenchmarkFire-12        77544386                13.75 ns/op            0 B/op          0 allocs/op
+    cpu: Apple M5 Pro
+    BenchmarkFire-18                   239354520    4.818 ns/op    0 B/op    0 allocs/op
+    BenchmarkFire_SingleConditional-18 226444806    5.224 ns/op    0 B/op    0 allocs/op
+    BenchmarkFire_Branching-18         207989106    5.749 ns/op    0 B/op    0 allocs/op
     PASS
-    ok      github.com/tobbstr/fsm  1.424s
     ```
+- **Introspection** — `Explain()` returns a full decision trace showing which branch matched and why, including hierarchy bubble-up
 - **Type-safe by design** — powered by Go generics for maximum flexibility
 - **Thread-safe specifications** — build once, use safely across goroutines
 - **Automatic documentation** — generate Mermaid.js state diagrams from your FSM specification
@@ -51,7 +53,7 @@ This FSM library is ideal for scenarios where you need to:
 - **Hierarchical state modeling** — nested states like "Order > Paid > PartiallyShipped"
 - **Separate concerns** — decouple state management from business logic
 - **Audit and visualization** — generate diagrams showing all possible state transitions
-- **Testable state machines** — guards and actions are pure/isolated functions easy to test
+- **Testable state machines** — conditions and actions are pure/isolated functions easy to test
 - **Thread-safe state definitions** — share FSM specs safely across goroutines
 - **Event-driven systems** — respond to triggers with well-defined state transitions
 
@@ -71,7 +73,7 @@ This FSM library is ideal for scenarios where you need to:
 
 - **Simple boolean flags suffice** — if you only have 2-3 states with trivial transitions, a simple `if/else` or boolean flags may be clearer
 - **No state persistence needed** — for purely transient, in-memory state that never needs to be saved or reconstructed
-- **Extreme performance requirements** — if even 13ns per transition is too slow (though this is already extremely fast)
+- **Extreme performance requirements** — if even ~5ns per transition is too slow (though this is already extremely fast)
 - **State is implicit** — when the state is naturally derived from other data rather than being explicit
 - **No clear state boundaries** — if your domain doesn't have well-defined discrete states
 - **Overkill for the problem** — adding FSM complexity when the problem is fundamentally simple
@@ -324,24 +326,20 @@ type Services struct {
     Logger *log.Logger
 }
 
-// Define the FSM specification. It should be stored in a global variable to avoid having to recreate it each time.
-// This is safe as the spec is read-only and thread-safe.
+// Define the FSM specification. Store in a global variable — it is read-only and thread-safe.
 func fsmSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderInput] {
-    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput]()
+    builder := fsm.NewBuilder[orderState, orderTrigger, OrderInput]()
 
-    builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-        // Guards are pure functions that check business rules (no side effects!)
-        WithGuard("status == paid", func(input OrderInput) error {
-            if input.CurrentStatus != "paid" {
-                return fmt.Errorf("order must be paid before shipping")
-            }
-            return nil
+    builder.From(statePaid).On(triggerShip).To(stateShipped).
+        // Conditions are pure boolean functions that check business rules (no side effects!)
+        When("status == paid", func(input OrderInput) bool {
+            return input.CurrentStatus == "paid"
         }).
         // Actions perform side effects using captured services
-        WithAction("update status and notify", func(ctx context.Context, input OrderInput) error {
+        Do("update status and notify", func(ctx context.Context, input OrderInput) error {
             // Services are captured from outer scope via closure
             services.Logger.Printf("Shipping order %d", input.OrderID)
-            
+
             if err := updateStatus(ctx, services.DB, input.OrderID, "shipped"); err != nil {
                 return fmt.Errorf("updating status: %w", err)
             }
@@ -361,14 +359,13 @@ func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
     if err != nil {
         return fmt.Errorf("loading order: %w", err)
     }
-    
-    // Create FSM spec once with services (typically done at app startup)
+
     services := Services{DB: s.db, Logger: s.logger}
     spec := fsmSpec(services)
-    
+
     m := fsm.New(spec, stateFromString(order.Status))
-    
-    // Clean Fire() call - trigger and input together form the stimuli for the transition
+
+    // Clean Fire() call — trigger and input together form the stimuli for the transition.
     // Only business data, no infrastructure dependencies!
     if err := m.Fire(ctx, triggerShip, OrderInput{
         OrderID:       orderID,
@@ -382,29 +379,6 @@ func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
     }
     return nil
 }
-
-func stateFromString(status string) orderState {
-    switch status {
-    case "created":
-        return stateCreated
-    case "paid":
-        return statePaid
-    case "shipped":
-        return stateShipped
-    default:
-        panic("unknown state")
-    }
-}
-
-// Example side-effect functions
-func updateStatus(ctx context.Context, db *sql.DB, orderID int, status string) error {
-    // ... update order in DB ...
-    return nil
-}
-func notifyShipped(ctx context.Context, db *sql.DB, customerID string) error {
-    // ... send notification ...
-    return nil
-}
 ```
 
 ### Dependency Injection Pattern
@@ -415,15 +389,14 @@ func notifyShipped(ctx context.Context, db *sql.DB, customerID string) error {
    - The **trigger** and **input** together form the stimuli that attempt to stimulate the FSM to move into another state
    - The trigger identifies the type of event (e.g., "pay", "ship", "cancel")
    - The input provides the context and data needed for the transition (e.g., order details, customer information)
-   - Together, they determine which transition to take and provide the necessary information for guards and actions
 
 2. **Separate business data (input) from infrastructure dependencies (services)**
    - **Input:** Per-transition business data passed to each `Fire()` call as part of the stimuli
    - **Services:** Infrastructure dependencies (DB, logger, external APIs) captured via closures when defining the FSM spec
 
-3. **Guards must be pure functions (no side effects)**
-   - Guards should only validate data in the input
-   - All side effects (DB calls, logging, etc.) belong in Actions, not Guards
+3. **Conditions must be pure functions (no side effects)**
+   - Conditions should only inspect data in the input and return `true` or `false`
+   - All side effects (DB calls, logging, etc.) belong in actions, not conditions
 
 ```go
 // ✅ Good: Clean separation of concerns
@@ -434,87 +407,38 @@ type OrderInput struct {
     IsValidOrder bool  // Computed/validated before calling Fire
 }
 
-type Services struct {
-    DB       *sql.DB
-    Logger   *log.Logger
-    EmailSvc EmailService
-}
-
 func SetupFSM(services Services) *fsm.Spec[State, Trigger, OrderInput] {
-    builder := fsm.NewSpecBuilder[State, Trigger, OrderInput]()
-    
-    builder.Transition().From(Pending).On(Confirm).To(Confirmed).
-        // Guards are pure - only check input data
-        WithGuard("order is valid", func(input OrderInput) error {
-            if !input.IsValidOrder || input.Amount <= 0 {
-                return fmt.Errorf("invalid order")
-            }
-            return nil
+    builder := fsm.NewBuilder[State, Trigger, OrderInput]()
+
+    builder.From(Pending).On(Confirm).To(Confirmed).
+        // Conditions are pure — only inspect input data
+        When("order is valid", func(input OrderInput) bool {
+            return input.IsValidOrder && input.Amount > 0
         }).
         // Actions use services for side effects
-        WithAction("process order", func(ctx context.Context, input OrderInput) error {
-            // Services captured via closure - clean and type-safe!
+        Do("process order", func(ctx context.Context, input OrderInput) error {
+            // Services captured via closure — clean and type-safe!
             services.Logger.Printf("Processing order %d", input.OrderID)
             return services.DB.Exec(ctx, "UPDATE orders SET status = 'confirmed' WHERE id = ?", input.OrderID)
         })
-    
+
     return builder.Build()
 }
 
 // Clean call site with only business data!
 machine.Fire(ctx, Confirm, OrderInput{
-    OrderID: 123, 
-    CustomerID: "CUST-456", 
+    OrderID: 123,
+    CustomerID: "CUST-456",
     Amount: 99.99,
     IsValidOrder: true,
 })
-```
-
-### Handling Multiple Conditional Transitions
-
-If your application service needs to perform several conditional operations in sequence, and you want
-to return as soon as any operation succeeds, use the sentinel error `fsm.ErrTransitionRejected`.
-This error lets you handle rejected transitions gracefully. Your application service controls the
-order in which transitions are attempted, while the FSM checks business rules and executes side effects.
-
-```go
-func (s *Service) RunOperationWithMultipleConditionalSteps(ctx context.Context, orderID int) error {
-    // Gather necessary business data
-    input := OrderInput{OrderID: orderID, /* ... */}
-    
-    m := fsm.New(fsmSpec(), stateA)
-    
-    err := m.Fire(ctx, triggerX, input)
-    if err == nil {
-        return nil // The transition was successful
-    }
-    if !errors.Is(err, fsm.ErrTransitionRejected) {
-        return fmt.Errorf("attempting first transition: %w", err) // An actual error occurred
-    }
-    // Otherwise, the transition was rejected due to the guard function not passing
-
-    // Try another transition
-    err = m.Fire(ctx, triggerY, input)
-    if err == nil {
-        return nil // The transition was successful
-    }
-    if !errors.Is(err, fsm.ErrTransitionRejected) {
-        return fmt.Errorf("attempting second transition: %w", err) // An actual error occurred
-    }
-    
-    // Final attempt
-    if err = m.Fire(ctx, triggerZ, input); err != nil {
-        return fmt.Errorf("attempting final transition: %w", err)
-    }
-    return nil
-}
 ```
 
 ## Core Concepts
 
 ### FSM Specification (Spec)
 
-The FSM specification is a **read-only, thread-safe** structure that defines all states, triggers, and transitions. 
+The FSM specification is a **read-only, thread-safe** structure that defines all states, triggers, and transitions.
 Build it once at application startup and reuse it across goroutines.
 
 ```go
@@ -522,7 +446,7 @@ Build it once at application startup and reuse it across goroutines.
 var orderFSMSpec = buildOrderFSMSpec(services)
 
 func buildOrderFSMSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderInput] {
-    builder := fsm.NewSpecBuilder[orderState, orderTrigger, OrderInput]()
+    builder := fsm.NewBuilder[orderState, orderTrigger, OrderInput]()
     // ... define transitions and states with services captured via closure ...
     return builder.Build()
 }
@@ -537,43 +461,37 @@ Each FSM instance maintains its own current state. Create a new machine for each
 machine := fsm.New(orderFSMSpec, order.CurrentState)
 ```
 
-### Guards
+### Conditions
 
-Guards are **pure functions** that implement business rules. They determine whether a transition is allowed based solely on the input data.
+Conditions are **pure boolean functions** that implement business rules. They determine whether a branch is taken based solely on the input data.
 
 **Important Principles:**
-- ✅ Guards should be **side-effect free** (no database calls, no API calls, no logging, no mutations)
-- ✅ Guards should only validate data in the input
-- ✅ Guards return `error`: return `nil` to allow the transition, or any error to reject it
-- ❌ Guards should **NOT** access services or perform I/O operations
+- ✅ Conditions should be **side-effect free** (no database calls, no API calls, no logging, no mutations)
+- ✅ Conditions should only inspect data in the input
+- ✅ Conditions return `bool`: `true` to allow the branch, `false` to skip it
+- ❌ Conditions should **NOT** access services or perform I/O operations
 
 ```go
-// ✅ Good: Pure guard checking only input data
-builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-    WithGuard("inventory available", func(input OrderInput) error {
-        if input.InventoryCount < input.OrderQuantity {
-            return fmt.Errorf("insufficient inventory")
-        }
-        return nil // Allow transition
+// ✅ Good: Pure condition checking only input data
+builder.From(statePaid).On(triggerShip).To(stateShipped).
+    When("inventory available", func(input OrderInput) bool {
+        return input.InventoryCount >= input.OrderQuantity
     })
 
-// ❌ Bad: Guard with side effects (database call)
-builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-    WithGuard("inventory check", func(input OrderInput) error {
-        // DON'T DO THIS! Guards should be pure functions
-        count, err := services.DB.QueryInventory(input.ProductID)
-        if err != nil || count < input.Quantity {
-            return fmt.Errorf("insufficient inventory")
-        }
-        return nil
+// ❌ Bad: Condition with side effects (database call)
+builder.From(statePaid).On(triggerShip).To(stateShipped).
+    When("inventory check", func(input OrderInput) bool {
+        // DON'T DO THIS! Conditions should be pure functions
+        count, _ := services.DB.QueryInventory(input.ProductID)
+        return count >= input.Quantity
     })
 ```
 
-**Why Pure Guards?**
+**Why Pure Conditions?**
 - Predictable and testable
 - No hidden side effects
-- Can be safely called multiple times (e.g., in `CanFire()`)
-- Clear separation: guards check rules, actions perform effects
+- Can be safely called multiple times (e.g., in `CanFire()` and `Explain()`)
+- Clear separation: conditions check rules, actions perform effects
 
 ### Actions
 
@@ -581,14 +499,168 @@ Actions perform side effects during transitions, such as database updates or ext
 
 ```go
 // Assuming services is captured from outer scope
-builder.Transition().From(statePaid).On(triggerShip).To(stateShipped).
-    WithAction("ship order", func(ctx context.Context, input OrderInput) error {
+builder.From(statePaid).On(triggerShip).To(stateShipped).
+    Do("ship order", func(ctx context.Context, input OrderInput) error {
         // services.ShippingService is captured via closure
         return services.ShippingService.CreateShipment(ctx, input.OrderID)
     })
 ```
 
-Actions are executed **after** guards pass and **before** the state changes.
+Actions are executed **after** the winning branch is selected and **before** the state changes.
+
+### Returning Data from Actions
+
+Action functions return only `error`, so to surface data created inside an action (e.g. a newly created resource ID), write it back via a pointer field in the input struct:
+
+```go
+type OrderInput struct {
+    OrderID    int
+    CustomerID string
+    Result     *ShipResult // populated by the action; nil if not needed
+}
+
+type ShipResult struct {
+    ShipmentID string
+}
+
+// In the FSM spec:
+builder.From(statePaid).On(triggerShip).To(stateShipped).
+    Do("create shipment", func(ctx context.Context, input OrderInput) error {
+        id, err := services.ShippingService.CreateShipment(ctx, input.OrderID)
+        if err != nil {
+            return err
+        }
+        input.Result.ShipmentID = id // write back via pointer
+        return nil
+    })
+
+// Call site:
+result := &ShipResult{}
+err := m.Fire(ctx, triggerShip, OrderInput{
+    OrderID:    123,
+    CustomerID: "CUST-456",
+    Result:     result,
+})
+// result.ShipmentID is now populated
+```
+
+This keeps the FSM spec a package-level variable (no rebuild per call) while letting action output flow back to the caller cleanly.
+
+## Branching: Multiple Guarded Transitions
+
+A single `(from, trigger)` pair can have multiple candidate branches, evaluated in definition order with **first-match-wins** semantics. This replaces the need to try multiple triggers in sequence just to express conditional routing.
+
+### Syntax
+
+Chain `.To(target).When(desc, cond)` for each guarded branch. Use `.Otherwise(target)` as the final unconditional fallback.
+
+```go
+builder.From(statePending).On(triggerWithdraw).
+    To(stateCompleted).When("balance >= amount", func(in Input) bool {
+        return in.Balance >= in.Amount
+    }).
+    To(stateOverdraft).When("overdraftAllowed", func(in Input) bool {
+        return in.OverdraftAllowed
+    }).
+    Otherwise(stateRejected) // unconditional fallback — must be last
+```
+
+### Semantics
+
+- Branches are evaluated **in definition order**; the first branch whose condition returns `true` wins.
+- An `Otherwise` branch (or any branch with no `When`) is unconditional and always matches — it must be the **last** branch. Placing an unconditional branch before a later one panics at `Build()` time.
+- If no branch matches and there is no `Otherwise`, `Fire` returns `ErrTransitionRejected`. The error message lists all the tried condition descriptions so the cause is immediately clear.
+- A transition with no `When` at all is equivalent to a single unconditional branch (the original single-branch behavior, preserved for backwards compatibility and the zero-alloc hot path).
+
+### Mermaid Diagram
+
+Each branch is emitted as a separate edge, so the diagram faithfully reflects all conditional routes:
+
+```
+stateDiagram-v2
+    Pending --> Completed : Withdraw [balance >= amount] / deduct balance
+    Pending --> Overdraft : Withdraw [overdraftAllowed]
+    Pending --> Rejected : Withdraw
+```
+
+### Rejection Error Message
+
+When no branch matches, the error message includes every condition description that was tried, grouped by hierarchy level:
+
+```
+transition rejected for trigger (Withdraw) from state (Pending): no branch matched
+  [Pending: "balance >= amount", "overdraftAllowed"; Account: "flagged"]
+```
+
+## Introspection with Explain
+
+`Explain` reports a full **multi-level decision trace** for what `Fire` would do — without actually firing. It is the recommended tool for debugging, logging, and building diagnostic UIs.
+
+```go
+decision := machine.Explain(triggerWithdraw, input)
+
+fmt.Println(decision.Found)        // true if any level had a rule for this trigger
+fmt.Println(decision.Matched)      // true if a branch was selected
+fmt.Println(decision.Target)       // the state that would be entered (valid if Matched)
+fmt.Println(decision.ResolvedFrom) // the hierarchy level whose branch won
+
+for _, level := range decision.Levels {
+    fmt.Printf("Level %v (matched=%v):\n", level.State, level.Matched)
+    for _, branch := range level.Branches {
+        fmt.Printf("  -> %v [%s]: %v\n", branch.Target, branch.Condition, branch.Outcome)
+    }
+}
+```
+
+### Decision Types
+
+```go
+type Outcome uint8
+const (
+    NotMatched Outcome = iota // condition returned false
+    Matched                   // this was the winning branch
+    Skipped                   // a later branch that was never evaluated (first-match-wins)
+)
+
+type BranchVerdict[S ~uint] struct {
+    Target    S       // the branch's target state
+    Condition string  // the When description; "" for unconditional/Otherwise
+    Outcome   Outcome
+}
+
+type LevelVerdict[S ~uint] struct {
+    State    S
+    Matched  bool
+    Branches []BranchVerdict[S]
+}
+
+type Decision[S ~uint] struct {
+    Found        bool              // any level had a rule for (state, trigger)?
+    Matched      bool              // did a branch match?
+    Target       S                 // state that would be entered (valid iff Matched)
+    ResolvedFrom S                 // level whose branch won
+    Levels       []LevelVerdict[S] // deepest-first: current state, then ancestors
+}
+```
+
+### Worked Example
+
+Current state `Pending` (child of `Account`), `Explain(Withdraw)`, account *is* flagged but balance is short and no overdraft allowed:
+
+```
+Found: true, Matched: true, Target: Frozen, ResolvedFrom: Account
+Levels: [
+  { State: Pending, Matched: false,
+    Branches: [ {Completed, "balance >= amount", NotMatched},
+                {Overdraft, "overdraftAllowed",  NotMatched} ] },
+  { State: Account, Matched: true,
+    Branches: [ {Frozen, "flagged", Matched} ] },
+]
+```
+
+The bubble-up to `Account` is visible in `Levels` — you can see exactly why `Pending`'s branches were skipped.
+
+> `Explain` allocates. It is never called by `Fire` or `CanFire`, so the zero-alloc hot path is unaffected.
 
 ## State Hooks
 
@@ -599,19 +671,17 @@ States can have `OnEntry` and `OnExit` hooks that run when entering or leaving a
 builder.State(stateShipped).
     OnEntry(func(ctx context.Context, input OrderInput) error {
         // Called when entering the "shipped" state
-        // services.Analytics is captured via closure
         return services.Analytics.TrackEvent(ctx, "order_shipped", input.OrderID)
     }).
     OnExit(func(ctx context.Context, input OrderInput) error {
         // Called when leaving the "shipped" state
-        // services.Cache is captured via closure
         return services.Cache.Invalidate(ctx, input.OrderID)
     })
 ```
 
 **Execution Order During Transition:**
 1. Find transition (with automatic trigger bubbling up the hierarchy if needed)
-2. Execute transition guard (if defined) - transition is rejected if guard returns error
+2. Select the first matching branch — rejected if no branch matches
 3. Exit current state and ancestors up to LCA (OnExit hooks)
 4. Execute transition action (if defined)
 5. Enter target state and ancestors from LCA down (OnEntry hooks)
@@ -624,7 +694,7 @@ Hierarchical states allow you to model complex state machines with parent-child 
 ### Defining Hierarchies
 
 ```go
-builder := fsm.NewSpecBuilder[state, trigger, input]()
+builder := fsm.NewBuilder[state, trigger, input]()
 
 // Define parent-child relationships
 builder.State(stateChild).Parent(stateParent)
@@ -633,18 +703,20 @@ builder.State(stateGrandchild).Parent(stateChild)
 
 ### Trigger Bubbling
 
-When a trigger is fired from a child state, the FSM automatically searches up the hierarchy for a valid transition:
+When a trigger is fired from a child state, the FSM automatically searches up the hierarchy for a matching branch:
 
 ```go
 // Define transition only on parent
-builder.Transition().From(stateParent).On(triggerX).To(stateOther)
+builder.From(stateParent).On(triggerX).To(stateOther)
 
 // Create FSM starting in grandchild
 machine := fsm.New(spec, stateGrandchild)
 
-// Trigger bubbles up: grandchild -> child -> parent (transition found!)
-machine.Fire(ctx, triggerX, input) // Successfully transitions from parent to stateOther
+// Trigger bubbles up: grandchild -> child -> parent (branch found!)
+machine.Fire(ctx, triggerX, input) // Successfully transitions to stateOther
 ```
+
+If a child state *has* a slot for the trigger but no branch matches, the FSM still bubbles up to the parent — it only stops at a level that actually selects a branch.
 
 ### Initial Substates
 
@@ -654,7 +726,7 @@ When transitioning to a state with an initial substate, the FSM automatically en
 builder.State(stateParent).Initial(stateDefaultChild)
 builder.State(stateDefaultChild).Parent(stateParent)
 
-builder.Transition().From(stateA).On(triggerX).To(stateParent)
+builder.From(stateA).On(triggerX).To(stateParent)
 
 machine := fsm.New(spec, stateA)
 machine.Fire(ctx, triggerX, input)
@@ -694,7 +766,7 @@ fmt.Printf("Current state: %v\n", currentState)
 
 ### CanFire()
 
-Checks if a transition can be made without actually performing it:
+Checks if a transition can be made without actually performing it. Allocation-free — does not call `Explain` internally.
 
 ```go
 if machine.CanFire(ctx, triggerShip, input) {
@@ -703,8 +775,6 @@ if machine.CanFire(ctx, triggerShip, input) {
     fmt.Println("Cannot ship the order yet")
 }
 ```
-
-This is useful for UI state management or conditional logic.
 
 ### IsIn()
 
@@ -731,35 +801,27 @@ for _, state := range hierarchy {
 
 ## Sentinel Errors
 
-The library provides two sentinel errors for common scenarios:
-
-### ErrTransitionRejected
-
-Returned when a guard function rejects a transition:
-
-```go
-err := machine.Fire(ctx, trigger, input)
-if errors.Is(err, fsm.ErrTransitionRejected) {
-    // Guard rejected the transition - business rules not met
-    fmt.Println("Transition not allowed at this time")
-}
-```
-
-### ErrNotFound
-
-Returned when no valid transition exists for the current state and trigger:
+| Error | When returned |
+|---|---|
+| `ErrTransitionRejected` | A slot exists for `(state, trigger)` but no branch's condition matched |
+| `ErrNotFound` | No slot is defined for `(state, trigger)` at any hierarchy level |
 
 ```go
 err := machine.Fire(ctx, trigger, input)
-if errors.Is(err, fsm.ErrNotFound) {
-    // No transition defined for this state-trigger combination
-    fmt.Println("Invalid operation for current state")
+switch {
+case err == nil:
+    // transition succeeded
+case errors.Is(err, fsm.ErrTransitionRejected):
+    // a rule existed but no branch matched — conditions not met
+    fmt.Println(err) // lists all tried condition descriptions
+case errors.Is(err, fsm.ErrNotFound):
+    // no transition defined for this state+trigger combination
 }
 ```
 
 ## Mermaid Diagram Generation
 
-Generate Mermaid.js state diagrams from your FSM specification for documentation:
+Generate Mermaid.js state diagrams from your FSM specification for documentation. Each branch is emitted as a separate edge:
 
 ```go
 spec := builder.Build()
@@ -770,13 +832,15 @@ fmt.Println(diagram)
 **Output:**
 ```
 stateDiagram-v2
-    stateCreated --> statePaid : triggerPay [payment valid] / process payment
-    statePaid --> stateShipped : triggerShip [inventory available] / ship order
+    Pending --> Completed : Withdraw [balance >= amount] / deduct balance
+    Pending --> Overdraft : Withdraw [overdraftAllowed]
+    Pending --> Rejected : Withdraw
+    Paid --> Shipped : Ship / ship order
 ```
 
 The diagram includes:
-- All transitions with their triggers
-- Guard descriptions (in square brackets)
+- All branches with their triggers
+- Condition descriptions (in square brackets)
 - Action descriptions (after forward slash)
 
 You can use this in your documentation, wikis, or any tool that supports Mermaid.js.
@@ -789,15 +853,18 @@ See [fsm.go](fsm.go) for full API documentation and comments.
 
 - `Spec[S, T, Input]` - Thread-safe FSM specification
 - `Machine[S, T, Input]` - FSM instance with current state
-- `Guard[Input]` - Function type for transition guards: `func(input Input) error`
+- `Condition[Input]` - Function type for branch conditions: `func(input Input) bool`
 - `Action[Input]` - Function type for transition actions and state hooks: `func(ctx context.Context, input Input) error`
+- `Decision[S]` / `LevelVerdict[S]` / `BranchVerdict[S]` / `Outcome` — returned by `Explain`
 
 ### Builder API
 
-- `NewSpecBuilder[S, T, Input]()` - Create a new spec builder (the number of states and triggers is derived automatically at `Build()` time)
-- `.Transition().From(S).On(T).To(S)` - Define a transition
-- `.WithGuard(desc string, guard Guard[Input])` - Add a guard to a transition
-- `.WithAction(desc string, action Action[Input])` - Add an action to a transition
+- `NewBuilder[S, T, Input]()` - Create a new spec builder (dimensions derived automatically at `Build()` time)
+- `.From(S).On(T).To(S)` - Open the first branch of a transition group
+- `.When(desc string, cond func(Input) bool)` - Add a boolean condition to the current branch
+- `.Do(desc string, action Action[Input])` - Add an action to the current branch
+- `.To(S)` *(on branchStep)* - Close the current branch and open the next in the same group
+- `.Otherwise(S)` - Open the final unconditional fallback branch (must be last)
 - `.State(S)` - Configure a state
 - `.OnEntry(action Action[Input])` - Add an entry hook to a state
 - `.OnExit(action Action[Input])` - Add an exit hook to a state
@@ -808,9 +875,10 @@ See [fsm.go](fsm.go) for full API documentation and comments.
 ### Machine API
 
 - `New[S, T, Input](spec *Spec, initialState S)` - Create a new FSM instance
-- `.Fire(ctx, trigger, input)` - Attempt a state transition. The trigger and input together form the stimuli that attempt to stimulate the FSM to move into another state.
+- `.Fire(ctx, trigger, input)` - Attempt a state transition
+- `.CanFire(ctx, trigger, input)` - Check if a branch would match (allocation-free)
+- `.Explain(trigger, input)` - Return a full decision trace (allocates)
 - `.State()` - Get current state
-- `.CanFire(ctx, trigger, input)` - Check if transition is possible. The trigger and input together form the stimuli that would attempt to stimulate the FSM.
 - `.IsIn(state)` - Check if FSM is in state (including hierarchy)
 - `.ActiveHierarchy()` - Get active state hierarchy
 

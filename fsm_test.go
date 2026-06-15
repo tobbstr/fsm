@@ -55,19 +55,16 @@ func (t trigger) String() string {
 
 type input struct{}
 
-func TestNewSpecBuilder(t *testing.T) {
+func TestNewBuilder(t *testing.T) {
 	require := require.New(t)
 
 	/* ---------------------------------- When ---------------------------------- */
-	builder := NewSpecBuilder[state, trigger, input]()
+	builder := NewBuilder[state, trigger, input]()
 
 	/* ---------------------------------- Then ---------------------------------- */
-	// The builder starts empty; dimensions are derived later, at Build() time.
 	require.NotNil(builder, "Expected a non-nil builder")
-	require.Empty(builder.transitionToBuilders, "Expected no transition definitions yet")
+	require.Empty(builder.branchDefs, "Expected no branch definitions yet")
 	require.Empty(builder.stateBuilders, "Expected no state definitions yet")
-	require.Zero(builder.stateCount, "Expected stateCount to be unset before Build()")
-	require.Zero(builder.triggerCount, "Expected triggerCount to be unset before Build()")
 }
 
 // TestBuild_DerivesDimensions verifies that Build() sizes the specification to fit the highest state and trigger
@@ -76,31 +73,31 @@ func TestBuild_DerivesDimensions(t *testing.T) {
 	// Test Cases
 	tests := []struct {
 		name             string
-		configure        func(*specBuilder[state, trigger, input])
+		configure        func(*Builder[state, trigger, input])
 		wantStateCount   uint
 		wantTriggerCount uint
 	}{
 		{
 			name:             "empty builder yields a minimal 1x1 specification",
-			configure:        func(b *specBuilder[state, trigger, input]) {},
+			configure:        func(b *Builder[state, trigger, input]) {},
 			wantStateCount:   1,
 			wantTriggerCount: 1,
 		},
 		{
 			name: "dimensions derived from transition states and triggers",
-			configure: func(b *specBuilder[state, trigger, input]) {
+			configure: func(b *Builder[state, trigger, input]) {
 				// Highest state referenced is locked(0)/unlocked(1) => stateCount 2.
 				// Highest trigger referenced is lock(1) => triggerCount 2.
-				b.Transition().From(unlocked).On(lock).To(locked)
+				b.From(unlocked).On(lock).To(locked)
 			},
 			wantStateCount:   2,
 			wantTriggerCount: 2,
 		},
 		{
 			name: "dimensions account for states referenced only in the hierarchy",
-			configure: func(b *specBuilder[state, trigger, input]) {
+			configure: func(b *Builder[state, trigger, input]) {
 				// grandchild(4) is referenced only via the hierarchy, so it must still be in range.
-				b.Transition().From(unlocked).On(lock).To(locked)
+				b.From(unlocked).On(lock).To(locked)
 				b.State(grandchild).Parent(child)
 				b.State(child).Parent(root)
 			},
@@ -114,7 +111,7 @@ func TestBuild_DerivesDimensions(t *testing.T) {
 			require := require.New(t)
 
 			/* ---------------------------------- Given --------------------------------- */
-			builder := NewSpecBuilder[state, trigger, input]()
+			builder := NewBuilder[state, trigger, input]()
 			tt.configure(builder)
 
 			/* ---------------------------------- When ---------------------------------- */
@@ -123,20 +120,18 @@ func TestBuild_DerivesDimensions(t *testing.T) {
 			/* ---------------------------------- Then ---------------------------------- */
 			require.Equal(tt.wantStateCount, spec.stateCount, "Unexpected derived state count")
 			require.Equal(tt.wantTriggerCount, spec.triggerCount, "Unexpected derived trigger count")
-			require.Len(spec.transitions, int(tt.wantStateCount*tt.wantTriggerCount), "Unexpected transitions slice size")
+			require.Len(spec.slots, int(tt.wantStateCount*tt.wantTriggerCount), "Unexpected slots slice size")
 			require.Len(spec.stateHooks, int(tt.wantStateCount), "Unexpected stateHooks slice size")
 		})
 	}
 }
 
 // TestBuild_ValidatesHierarchyDepth verifies that Build() accepts a hierarchy at the maximum supported depth and
-// panics on one that exceeds it (which would otherwise be silently truncated by readHierarchy).
+// panics on one that exceeds it.
 func TestBuild_ValidatesHierarchyDepth(t *testing.T) {
-	// buildChain returns a function that builds a spec with a single parent chain `levels` states deep:
-	// state(0) <- state(1) <- ... <- state(levels-1).
 	buildChain := func(levels int) func() {
 		return func() {
-			b := NewSpecBuilder[state, trigger, input]()
+			b := NewBuilder[state, trigger, input]()
 			for i := 1; i < levels; i++ {
 				b.State(state(i)).Parent(state(i - 1))
 			}
@@ -153,87 +148,28 @@ func TestBuild_ValidatesHierarchyDepth(t *testing.T) {
 	})
 }
 
-func TestSpecBuilder_Transition(t *testing.T) {
-	// Test Types
-	type (
-		given struct {
-			numTransitionCalls int
-		}
-		want struct {
-			numTransitionDefinitionsStarted int
-		}
-	)
-
+func TestBuilder_State(t *testing.T) {
 	// Test Cases
 	tests := []struct {
 		name  string
-		given given
-		want  want
+		given []state
 	}{
 		{
-			name: "every call to Transition increments the numTransitionDefinitionsStarted counter",
-			given: given{
-				numTransitionCalls: 3,
-			},
-			want: want{
-				numTransitionDefinitionsStarted: 3,
-			},
+			name:  "adds a stateBuilder for each state defined",
+			given: []state{locked, unlocked},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			/* ---------------------------------- Given --------------------------------- */
 			require := require.New(t)
-			builder := NewSpecBuilder[state, trigger, input]()
-			var got *transitionBuilder[state, trigger, input]
+			builder := NewBuilder[state, trigger, input]()
 
-			/* ---------------------------------- When ---------------------------------- */
-			for range tt.given.numTransitionCalls {
-				got = builder.Transition()
+			for _, s := range tt.given {
+				builder.State(s)
 			}
 
-			/* ---------------------------------- Then ---------------------------------- */
-			require.Equal(tt.want.numTransitionDefinitionsStarted, builder.numTransitionDefinitionsStarted, "Unexpected number of transition definitions started")
-			require.Equal(builder, got.b, "Transition builder does not reference the correct spec builder")
-		})
-	}
-}
-
-func TestSpecBuilder_State(t *testing.T) {
-	// Test Types
-	type (
-		given struct {
-			states []state
-		}
-	)
-
-	// Test Cases
-	tests := []struct {
-		name  string
-		given given
-	}{
-		{
-			name: "adds a stateBuilder for each state defined",
-			given: given{
-				states: []state{locked, unlocked},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			/* ---------------------------------- Given --------------------------------- */
-			require := require.New(t)
-			builder := NewSpecBuilder[state, trigger, input]()
-
-			/* ---------------------------------- When ---------------------------------- */
-			for _, state := range tt.given.states {
-				builder.State(state)
-			}
-
-			/* ---------------------------------- Then ---------------------------------- */
-			require.Len(tt.given.states, len(builder.stateBuilders), "Unexpected number of state builders created")
+			require.Len(tt.given, len(builder.stateBuilders), "Unexpected number of state builders created")
 			for _, sb := range builder.stateBuilders {
 				require.Equal(builder, sb.b, "State builder does not reference the correct spec builder")
 			}
@@ -241,24 +177,22 @@ func TestSpecBuilder_State(t *testing.T) {
 	}
 }
 
-func TestSpecBuilder_Build(t *testing.T) {
+func TestBuild(t *testing.T) {
 	// Test Types
 	type (
 		outputs struct {
-			// Transitions
-			guardCalled  *bool
-			actionCalled *bool
-			// States
+			condCalled    *bool
+			actionCalled  *bool
 			onEntryCalled *bool
 			onExitCalled  *bool
 		}
 		given struct {
-			configure  func(*specBuilder[state, trigger, input], outputs)
+			configure  func(*Builder[state, trigger, input], outputs)
 			fsmTrigger trigger
 		}
 		want struct {
 			panic         bool
-			guardCalled   bool
+			condCalled    bool
 			actionCalled  bool
 			onEntryCalled bool
 			onExitCalled  bool
@@ -272,114 +206,82 @@ func TestSpecBuilder_Build(t *testing.T) {
 		want  want
 	}{
 		{
-			name: "panics when incomplete transition is defined 1",
+			name: "panics when incomplete transition is defined (On without To)",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition()
+				configure: func(b *Builder[state, trigger, input], o outputs) {
+					b.From(unlocked).On(lock) // no To()
 				},
 			},
-			want: want{
-				panic: true,
-			},
+			want: want{panic: true},
 		},
 		{
-			name: "panics when a duplicate transition is defined for the same from state and trigger",
+			name: "panics when unconditional branch shadows later branches",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition().From(unlocked).On(lock).To(locked)
-					b.Transition().From(unlocked).On(lock).To(unlocked)
+				configure: func(b *Builder[state, trigger, input], o outputs) {
+					// unconditional To first, then another branch — must panic
+					b.From(unlocked).On(lock).To(locked).To(unlocked).When("cond", func(input) bool { return true })
 				},
 			},
-			want: want{
-				panic: true,
-			},
-		},
-		{
-			name: "panics when incomplete transition is defined 2",
-			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition().From(unlocked)
-				},
-			},
-			want: want{
-				panic: true,
-			},
-		},
-		{
-			name: "panics when incomplete transition is defined 3",
-			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition().From(unlocked).On(lock)
-				},
-			},
-			want: want{
-				panic: true,
-			},
+			want: want{panic: true},
 		},
 		{
 			name: "panics when initial state without parent defined",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
+				configure: func(b *Builder[state, trigger, input], o outputs) {
 					b.State(root).Initial(child)
 				},
 			},
-			want: want{
-				panic: true,
-			},
+			want: want{panic: true},
 		},
 		{
 			name: "panics when initial state with wrong parent defined",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
+				configure: func(b *Builder[state, trigger, input], o outputs) {
 					b.State(root).Initial(child)
 					b.State(child).Parent(unlocked)
 				},
 			},
-			want: want{
-				panic: true,
-			},
+			want: want{panic: true},
 		},
 		{
 			name: "single transition defined",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition().From(unlocked).On(lock).To(locked)
+				configure: func(b *Builder[state, trigger, input], o outputs) {
+					b.From(unlocked).On(lock).To(locked)
 				},
 				fsmTrigger: lock,
 			},
-			want: want{
-				panic: false,
-			},
+			want: want{panic: false},
 		},
 		{
-			name: "transition action and guards called",
+			name: "transition action and condition called",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition().From(unlocked).On(lock).To(locked).
-						WithAction("actionCalled is set", func(ctx context.Context, p input) error {
+				configure: func(b *Builder[state, trigger, input], o outputs) {
+					b.From(unlocked).On(lock).To(locked).
+						Do("actionCalled is set", func(ctx context.Context, p input) error {
 							*o.actionCalled = true
 							return nil
 						}).
-						WithGuard("guardCalled is set", func(p input) error {
-							*o.guardCalled = true
-							return nil
+						When("condCalled is set", func(p input) bool {
+							*o.condCalled = true
+							return true
 						})
-					b.Transition().From(locked).On(unlock).To(unlocked)
+					b.From(locked).On(unlock).To(unlocked)
 				},
 				fsmTrigger: lock,
 			},
 			want: want{
 				panic:        false,
-				guardCalled:  true,
+				condCalled:   true,
 				actionCalled: true,
 			},
 		},
 		{
 			name: "state hooks called",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
-					b.Transition().From(unlocked).On(lock).To(locked)
-					b.Transition().From(locked).On(unlock).To(unlocked)
+				configure: func(b *Builder[state, trigger, input], o outputs) {
+					b.From(unlocked).On(lock).To(locked)
+					b.From(locked).On(unlock).To(unlocked)
 					b.State(unlocked).OnExit(func(ctx context.Context, p input) error {
 						*o.onExitCalled = true
 						return nil
@@ -400,45 +302,39 @@ func TestSpecBuilder_Build(t *testing.T) {
 		{
 			name: "initial state with correct parent defined",
 			given: given{
-				configure: func(b *specBuilder[state, trigger, input], o outputs) {
+				configure: func(b *Builder[state, trigger, input], o outputs) {
 					b.State(root).Initial(child)
 					b.State(child).Parent(root)
-					b.Transition().From(unlocked).On(lock).To(locked)
+					b.From(unlocked).On(lock).To(locked)
 				},
 				fsmTrigger: lock,
 			},
-			want: want{
-				panic: false,
-			},
+			want: want{panic: false},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			/* ---------------------------------- Given --------------------------------- */
 			require := require.New(t)
-			builder := NewSpecBuilder[state, trigger, input]()
+			builder := NewBuilder[state, trigger, input]()
 
-			// Outputs to be checked against in the Then section of the test.
 			var (
-				guardCalled   bool
+				condCalled    bool
 				actionCalled  bool
 				onEntryCalled bool
 				onExitCalled  bool
 			)
 			tt.given.configure(builder, outputs{
-				guardCalled:   &guardCalled,
+				condCalled:    &condCalled,
 				actionCalled:  &actionCalled,
 				onEntryCalled: &onEntryCalled,
 				onExitCalled:  &onExitCalled,
 			})
 
-			/* ---------------------------------- When ---------------------------------- */
 			res := tryUnarySupplier(func() *Spec[state, trigger, input] {
 				return builder.Build()
 			})
 
-			/* ---------------------------------- Then ---------------------------------- */
-			// Assert the function panics as expected.
 			if tt.want.panic {
 				require.True(res.panicked, "Expected panic but did not get one")
 				require.False(res.optional.valid, "Expected optional value to be unset")
@@ -447,16 +343,12 @@ func TestSpecBuilder_Build(t *testing.T) {
 			require.True(res.optional.valid, "Expected optional value to be set")
 			got := res.optional.value
 
-			// Build the FSM from the specification and fire the given trigger.
 			fsm := New(got, unlocked)
 			err := fsm.Fire(t.Context(), tt.given.fsmTrigger, input{})
 			require.NoError(err, "Unexpected error when firing trigger")
 
-			// Assert transition guard and action calls.
-			require.Equal(tt.want.guardCalled, guardCalled, "Unexpected value for guardCalled")
+			require.Equal(tt.want.condCalled, condCalled, "Unexpected value for condCalled")
 			require.Equal(tt.want.actionCalled, actionCalled, "Unexpected value for actionCalled")
-
-			// Assert state entry and exit calls.
 			require.Equal(tt.want.onEntryCalled, onEntryCalled, "Unexpected value for onEntryCalled")
 			require.Equal(tt.want.onExitCalled, onExitCalled, "Unexpected value for onExitCalled")
 		})
@@ -467,20 +359,15 @@ func TestMachine_Fire(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Create a new FSM specification.
-	specBuilder := NewSpecBuilder[state, trigger, input]()
-	specBuilder.Transition().From(unlocked).On(lock).To(locked)
-	specBuilder.Transition().From(locked).On(unlock).To(unlocked)
-	spec := specBuilder.Build()
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(unlocked).On(lock).To(locked)
+	builder.From(locked).On(unlock).To(unlocked)
+	spec := builder.Build()
 
-	// Create a new FSM with an initial state.
 	fsm := New(spec, unlocked)
-
-	// Assert the initial state of the FSM.
 	require.Equal(unlocked, fsm.State(), "Expected initial state to be unlocked")
 
 	/* --------------------------------- When 1 --------------------------------- */
-	// Fire the lock trigger and assert the state is now locked.
 	err := fsm.Fire(t.Context(), lock, input{})
 
 	/* --------------------------------- Then 1 --------------------------------- */
@@ -488,7 +375,6 @@ func TestMachine_Fire(t *testing.T) {
 	require.Equal(locked, fsm.State(), "Expected state to be locked")
 
 	/* --------------------------------- When 2 --------------------------------- */
-	// Fire the unlock trigger and assert the state is now unlocked.
 	err = fsm.Fire(t.Context(), unlock, input{})
 
 	/* --------------------------------- Then 2 --------------------------------- */
@@ -500,28 +386,24 @@ func TestMachine_Fire_ReturnsErrors(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Create a new FSM specification.
-	specBuilder := NewSpecBuilder[state, trigger, input]()
-	specBuilder.Transition().From(unlocked).On(lock).To(locked).
-		WithGuard("always errors", func(p input) error {
-			return fmt.Errorf("guard error")
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(unlocked).On(lock).To(locked).
+		When("always false", func(p input) bool {
+			return false
 		})
-	spec := specBuilder.Build()
+	spec := builder.Build()
 
-	// Create a new FSM with an initial state.
 	fsm := New(spec, unlocked)
 
 	/* --------------------------------- When 1 --------------------------------- */
-	// Fire the lock trigger and assert the error is ErrTransitionRejected and the state is still unlocked.
 	err := fsm.Fire(t.Context(), lock, input{})
 
 	/* --------------------------------- Then 1 --------------------------------- */
 	require.Error(err, "Expected error when firing trigger")
-	require.ErrorIs(err, ErrTransitionRejected, "Expected ErrTransitionRejected when guard fails")
+	require.ErrorIs(err, ErrTransitionRejected, "Expected ErrTransitionRejected when condition fails")
 	require.Equal(unlocked, fsm.State(), "Expected state to be unlocked")
 
 	/* --------------------------------- When 2 --------------------------------- */
-	// Fire the unlock trigger and assert the error is ErrNotFound and the state is still unlocked.
 	err = fsm.Fire(t.Context(), unlock, input{})
 
 	/* --------------------------------- Then 2 --------------------------------- */
@@ -534,12 +416,10 @@ func TestMachine_CanFire(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, input]()
-	spec.Transition().From(unlocked).On(lock).To(locked)
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(unlocked).On(lock).To(locked)
 
-	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), unlocked)
+	fsm := New(builder.Build(), unlocked)
 
 	/* ---------------------------------- When ---------------------------------- */
 	got := fsm.CanFire(t.Context(), unlock, input{})
@@ -560,27 +440,23 @@ func TestMachine_Fire_HierarchicalStates_TriggerBubbling(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Outputs
 	rootActionCalled := false
 	grandchildActionCalled := false
 
-	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, input]()
-	spec.Transition().From(root).On(lock).To(grandchild).WithAction("rootActionCalled is set", func(ctx context.Context, p input) error {
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(root).On(lock).To(grandchild).Do("rootActionCalled is set", func(ctx context.Context, p input) error {
 		rootActionCalled = true
 		return nil
 	})
-	spec.Transition().From(grandchild).On(unlock).To(child).WithAction("grandchildActionCalled is set", func(ctx context.Context, p input) error {
+	builder.From(grandchild).On(unlock).To(child).Do("grandchildActionCalled is set", func(ctx context.Context, p input) error {
 		grandchildActionCalled = true
 		return nil
 	})
 
-	// Configure state hierarchy.
-	spec.State(grandchild).Parent(child)
-	spec.State(child).Parent(root)
+	builder.State(grandchild).Parent(child)
+	builder.State(child).Parent(root)
 
-	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), grandchild)
+	fsm := New(builder.Build(), grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
 	err := fsm.Fire(t.Context(), lock, input{})
@@ -595,34 +471,30 @@ func TestMachine_Fire_HierarchicalStates_ReturnsErrorWhenNoTransitionIsFound(t *
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Outputs
 	rootActionCalled := false
 	grandchildActionCalled := false
 
-	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, input]()
-	spec.Transition().From(root).On(unlock).To(grandchild).WithAction("rootActionCalled is set", func(ctx context.Context, p input) error {
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(root).On(unlock).To(grandchild).Do("rootActionCalled is set", func(ctx context.Context, p input) error {
 		rootActionCalled = true
 		return nil
 	})
-	spec.Transition().From(grandchild).On(unlock).To(child).WithAction("grandchildActionCalled is set", func(ctx context.Context, p input) error {
+	builder.From(grandchild).On(unlock).To(child).Do("grandchildActionCalled is set", func(ctx context.Context, p input) error {
 		grandchildActionCalled = true
 		return nil
 	})
 
-	// Configure state hierarchy.
-	spec.State(grandchild).Parent(child)
-	spec.State(child).Parent(root)
+	builder.State(grandchild).Parent(child)
+	builder.State(child).Parent(root)
 
-	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), grandchild)
+	fsm := New(builder.Build(), grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
 	err := fsm.Fire(t.Context(), lock, input{})
 
 	/* ---------------------------------- Then ---------------------------------- */
 	require.Error(err, "Unexpected error when firing trigger")
-	require.False(rootActionCalled, "Expected root action to be called")
+	require.False(rootActionCalled, "Expected root action to NOT be called")
 	require.False(grandchildActionCalled, "Expected grandchild action to NOT be called")
 }
 
@@ -630,15 +502,11 @@ func TestMachine_ActiveHierarchy(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Create a new FSM specification.
-	spec := NewSpecBuilder[state, trigger, input]()
+	builder := NewBuilder[state, trigger, input]()
+	builder.State(grandchild).Parent(child)
+	builder.State(child).Parent(root)
 
-	// Configure state hierarchy.
-	spec.State(grandchild).Parent(child)
-	spec.State(child).Parent(root)
-
-	// Create a new FSM with an initial state.
-	fsm := New(spec.Build(), grandchild)
+	fsm := New(builder.Build(), grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
 	const maxDepth = 10
@@ -656,7 +524,6 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Outputs
 	actionCalled := false
 	grandchildOnEntryCalled := false
 	grandchildOnExitCalled := false
@@ -668,16 +535,14 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 	lockedOnExitCalled := false
 	callOrder := make([]string, 0, 10)
 
-	// Create a new FSM specification.
-	specBuilder := NewSpecBuilder[state, trigger, input]()
-	specBuilder.Transition().From(grandchild).On(lock).To(locked).WithAction("actionCalled is set", func(ctx context.Context, p input) error {
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(grandchild).On(lock).To(locked).Do("actionCalled is set", func(ctx context.Context, p input) error {
 		actionCalled = true
 		callOrder = append(callOrder, "action")
 		return nil
 	})
 
-	// Configure state hierarchy.
-	specBuilder.State(root).
+	builder.State(root).
 		OnEntry(func(ctx context.Context, p input) error {
 			rootOnEntryCalled = true
 			callOrder = append(callOrder, "rootOnEntry")
@@ -688,7 +553,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			callOrder = append(callOrder, "rootOnExit")
 			return nil
 		})
-	specBuilder.State(grandchild).
+	builder.State(grandchild).
 		Parent(child).
 		OnEntry(func(ctx context.Context, p input) error {
 			grandchildOnEntryCalled = true
@@ -700,7 +565,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			callOrder = append(callOrder, "grandchildOnExit")
 			return nil
 		})
-	specBuilder.State(child).
+	builder.State(child).
 		Parent(root).
 		OnEntry(func(ctx context.Context, p input) error {
 			lcaOnEntryCalled = true
@@ -712,7 +577,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			callOrder = append(callOrder, "lcaOnExit")
 			return nil
 		})
-	specBuilder.State(locked).
+	builder.State(locked).
 		Parent(child).
 		OnEntry(func(ctx context.Context, p input) error {
 			lockedOnEntryCalled = true
@@ -725,8 +590,7 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 			return nil
 		})
 
-	// Create a new FSM with an initial state.
-	spec := specBuilder.Build()
+	spec := builder.Build()
 	fsm := New(spec, grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
@@ -735,7 +599,6 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 	/* ---------------------------------- Then ---------------------------------- */
 	require.NoError(err, "Unexpected error when firing trigger")
 
-	// Assert the state hook calls when moving up the hierarchy.
 	require.True(grandchildOnExitCalled, "Expected grandchild onExit to be called")
 	require.False(grandchildOnEntryCalled, "Expected grandchild onEntry to NOT be called")
 	require.False(lcaOnEntryCalled, "Expected LCA onEntry to NOT be called")
@@ -743,17 +606,12 @@ func TestMachine_Fire_HierarchicalStates_CallsStateHooksAndTransActionInCorrectO
 	require.False(rootOnEntryCalled, "Expected root onEntry to NOT be called")
 	require.False(rootOnExitCalled, "Expected root onExit to NOT be called")
 
-	// Assert the transition action was called.
 	require.True(actionCalled, "Expected root action to be called")
 
-	// Assert the state hook calls when moving down the hierarchy.
 	require.True(lockedOnEntryCalled, "Expected locked onEntry to be called")
 	require.False(lockedOnExitCalled, "Expected locked onExit to NOT be called")
 
-	// Assert the call order.
 	require.Equal([]string{"grandchildOnExit", "action", "lockedOnEntry"}, callOrder, "Unexpected call order")
-
-	// Assert the FSM state.
 	require.Equal(locked, fsm.State(), "Expected FSM to be in locked state")
 }
 
@@ -761,23 +619,20 @@ func TestSpec_MermaidDiagram(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Create a new FSM specification with multiple states and transitions
-	specBuilder := NewSpecBuilder[state, trigger, input]()
-	specBuilder.Transition().From(unlocked).On(lock).To(locked).
-		WithGuard("true", func(p input) error { return nil }).
-		WithAction("runOp()", func(ctx context.Context, p input) error { return nil })
-	specBuilder.Transition().From(locked).On(unlock).To(unlocked)
-	specBuilder.Transition().From(root).On(lock).To(child)
-	specBuilder.Transition().From(child).On(unlock).To(grandchild)
-	specBuilder.Transition().From(grandchild).On(lock).To(root)
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(unlocked).On(lock).To(locked).
+		When("true", func(p input) bool { return true }).
+		Do("runOp()", func(ctx context.Context, p input) error { return nil })
+	builder.From(locked).On(unlock).To(unlocked)
+	builder.From(root).On(lock).To(child)
+	builder.From(child).On(unlock).To(grandchild)
+	builder.From(grandchild).On(lock).To(root)
 
-	// Configure state hierarchy
-	specBuilder.State(grandchild).Parent(child)
-	specBuilder.State(child).Parent(root)
+	builder.State(grandchild).Parent(child)
+	builder.State(child).Parent(root)
 
-	spec := specBuilder.Build()
+	spec := builder.Build()
 
-	// Expected lines in the diagram
 	expectedLines := []string{
 		"stateDiagram-v2",
 		"unlocked --> locked : lock [true] / runOp()",
@@ -800,7 +655,6 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 	/* ---------------------------------- Given --------------------------------- */
 	require := require.New(t)
 
-	// Outputs
 	actionCalled := false
 	grandchildOnEntryCalled := false
 	grandchildOnExitCalled := false
@@ -812,16 +666,14 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 	lockedOnExitCalled := false
 	callOrder := make([]string, 0, 10)
 
-	// Create a new FSM specification.
-	specBuilder := NewSpecBuilder[state, trigger, input]()
-	specBuilder.Transition().From(grandchild).On(lock).To(root).WithAction("actionCalled is set", func(ctx context.Context, p input) error {
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(grandchild).On(lock).To(root).Do("actionCalled is set", func(ctx context.Context, p input) error {
 		actionCalled = true
 		callOrder = append(callOrder, "action")
 		return nil
 	})
 
-	// Configure state hierarchy.
-	specBuilder.State(root).
+	builder.State(root).
 		Initial(locked).
 		OnEntry(func(ctx context.Context, p input) error {
 			rootOnEntryCalled = true
@@ -833,7 +685,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			callOrder = append(callOrder, "rootOnExit")
 			return nil
 		})
-	specBuilder.State(grandchild).
+	builder.State(grandchild).
 		Parent(child).
 		OnEntry(func(ctx context.Context, p input) error {
 			grandchildOnEntryCalled = true
@@ -845,8 +697,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			callOrder = append(callOrder, "grandchildOnExit")
 			return nil
 		})
-
-	specBuilder.State(child).
+	builder.State(child).
 		Parent(root).
 		OnEntry(func(ctx context.Context, p input) error {
 			childOnEntryCalled = true
@@ -858,7 +709,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			callOrder = append(callOrder, "childOnExit")
 			return nil
 		})
-	specBuilder.State(locked).
+	builder.State(locked).
 		Parent(root).
 		OnEntry(func(ctx context.Context, p input) error {
 			lockedOnEntryCalled = true
@@ -871,10 +722,7 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 			return nil
 		})
 
-	// Build the FSM specification.
-	spec := specBuilder.Build()
-
-	// Create a new FSM with an initial state.
+	spec := builder.Build()
 	fsm := New(spec, grandchild)
 
 	/* ---------------------------------- When ---------------------------------- */
@@ -883,7 +731,6 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 	/* ---------------------------------- Then ---------------------------------- */
 	require.NoError(err, "Unexpected error when firing trigger")
 
-	// Assert the state hook calls when moving up the hierarchy.
 	require.True(grandchildOnExitCalled, "Expected grandchild onExit to be called")
 	require.False(grandchildOnEntryCalled, "Expected grandchild onEntry to NOT be called")
 	require.False(childOnEntryCalled, "Expected child onEntry to NOT be called")
@@ -891,16 +738,267 @@ func TestMachine_Fire_HierarchicalStates_InitialSubstate(t *testing.T) {
 	require.False(rootOnEntryCalled, "Expected root onEntry NOT to be called")
 	require.False(rootOnExitCalled, "Expected root onExit to NOT be called")
 
-	// Assert the transition action was called.
 	require.True(actionCalled, "Expected root action to be called")
 
-	// Assert the state hook calls when moving down the hierarchy.
 	require.True(lockedOnEntryCalled, "Expected locked onEntry to be called")
 	require.False(lockedOnExitCalled, "Expected locked onExit to NOT be called")
 
-	// Assert the call order.
 	require.Equal([]string{"grandchildOnExit", "childOnExit", "action", "lockedOnEntry"}, callOrder, "Unexpected call order")
-
-	// Assert the FSM state.
 	require.Equal(locked, fsm.State(), "Expected FSM to be in locked state")
+}
+
+// TestMachine_Fire_MultipleBranches tests first-match-wins semantics with multiple guarded branches.
+func TestMachine_Fire_MultipleBranches(t *testing.T) {
+	type inp struct{ val int }
+
+	const (
+		sA state = iota
+		sB
+		sC
+		sD
+	)
+	const tX trigger = 0
+
+	t.Run("first matching branch wins", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).
+			To(sB).When("val==1", func(i inp) bool { return i.val == 1 }).
+			To(sC).When("val==2", func(i inp) bool { return i.val == 2 }).
+			Otherwise(sD)
+
+		spec := builder.Build()
+
+		fsm := New(spec, sA)
+		require.NoError(fsm.Fire(t.Context(), tX, inp{val: 1}))
+		require.Equal(sB, fsm.State())
+
+		fsm = New(spec, sA)
+		require.NoError(fsm.Fire(t.Context(), tX, inp{val: 2}))
+		require.Equal(sC, fsm.State())
+
+		fsm = New(spec, sA)
+		require.NoError(fsm.Fire(t.Context(), tX, inp{val: 99}))
+		require.Equal(sD, fsm.State())
+	})
+
+	t.Run("no branch matches returns ErrTransitionRejected", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).
+			To(sB).When("val==1", func(i inp) bool { return i.val == 1 }).
+			To(sC).When("val==2", func(i inp) bool { return i.val == 2 })
+
+		fsm := New(builder.Build(), sA)
+		err := fsm.Fire(t.Context(), tX, inp{val: 99})
+		require.ErrorIs(err, ErrTransitionRejected)
+		require.Equal(sA, fsm.State(), "state must not change on rejection")
+	})
+
+	t.Run("bubbling: child branches all reject, parent branch matches", func(t *testing.T) {
+		require := require.New(t)
+
+		const (
+			parentState state = root
+			childState  state = child
+			targetState state = locked
+		)
+		const trig trigger = 0
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(childState).On(trig).
+			To(sB).When("never", func(i inp) bool { return false })
+		builder.From(parentState).On(trig).
+			To(targetState)
+		builder.State(childState).Parent(parentState)
+
+		fsm := New(builder.Build(), childState)
+		err := fsm.Fire(t.Context(), trig, inp{})
+		require.NoError(err)
+		require.Equal(targetState, fsm.State())
+	})
+
+	t.Run("no slot at all returns ErrNotFound", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).To(sB)
+
+		fsm := New(builder.Build(), sB) // sB has no transition on tX
+		err := fsm.Fire(t.Context(), tX, inp{})
+		require.ErrorIs(err, ErrNotFound)
+	})
+}
+
+// TestMachine_Explain tests the Explain introspection method.
+func TestMachine_Explain(t *testing.T) {
+	type inp struct{ val int }
+
+	const (
+		sA state = iota
+		sB
+		sC
+		sD
+		sParent
+	)
+	const tX trigger = 0
+
+	t.Run("matched at current level", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).
+			To(sB).When("val==1", func(i inp) bool { return i.val == 1 }).
+			Otherwise(sC)
+
+		fsm := New(builder.Build(), sA)
+		d := fsm.Explain(tX, inp{val: 1})
+
+		require.True(d.Found)
+		require.True(d.Matched)
+		require.Equal(sB, d.Target)
+		require.Equal(sA, d.ResolvedFrom)
+		require.Len(d.Levels, 1)
+		require.True(d.Levels[0].Matched)
+		require.Equal(Matched, d.Levels[0].Branches[0].Outcome)
+		require.Equal(Skipped, d.Levels[0].Branches[1].Outcome)
+	})
+
+	t.Run("matched at ancestor level (bubble-up)", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		// child: never matches
+		builder.From(sA).On(tX).
+			To(sB).When("never", func(i inp) bool { return false })
+		// parent: always matches
+		builder.From(sParent).On(tX).To(sC)
+		builder.State(sA).Parent(sParent)
+
+		fsm := New(builder.Build(), sA)
+		d := fsm.Explain(tX, inp{})
+
+		require.True(d.Found)
+		require.True(d.Matched)
+		require.Equal(sC, d.Target)
+		require.Equal(sParent, d.ResolvedFrom)
+		require.Len(d.Levels, 2)
+		require.False(d.Levels[0].Matched)
+		require.Equal(sA, d.Levels[0].State)
+		require.True(d.Levels[1].Matched)
+		require.Equal(sParent, d.Levels[1].State)
+	})
+
+	t.Run("no match anywhere — Found true but Matched false", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).
+			To(sB).When("never", func(i inp) bool { return false })
+
+		fsm := New(builder.Build(), sA)
+		d := fsm.Explain(tX, inp{})
+
+		require.True(d.Found)
+		require.False(d.Matched)
+		require.Equal(sA, d.ResolvedFrom)
+		require.Len(d.Levels, 1)
+		require.False(d.Levels[0].Matched)
+	})
+
+	t.Run("no rule anywhere — Found false", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sB).On(tX).To(sC) // rule for sB, not sA
+
+		fsm := New(builder.Build(), sA)
+		d := fsm.Explain(tX, inp{})
+
+		require.False(d.Found)
+		require.Nil(d.Levels)
+	})
+
+	t.Run("non-hierarchical machine has len(Levels)==1", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).To(sB)
+
+		fsm := New(builder.Build(), sA)
+		d := fsm.Explain(tX, inp{})
+
+		require.True(d.Matched)
+		require.Len(d.Levels, 1)
+	})
+
+	t.Run("Explain agrees with Fire", func(t *testing.T) {
+		require := require.New(t)
+
+		builder := NewBuilder[state, trigger, inp]()
+		builder.From(sA).On(tX).
+			To(sB).When("val==1", func(i inp) bool { return i.val == 1 }).
+			Otherwise(sC)
+
+		spec := builder.Build()
+
+		for _, v := range []int{1, 99} {
+			in := inp{val: v}
+			m := New(spec, sA)
+			d := m.Explain(tX, in)
+			err := m.Fire(t.Context(), tX, in)
+			if d.Matched {
+				require.NoError(err, "Explain says matched, Fire should succeed")
+				require.Equal(d.Target, m.State(), "Fire target must equal Explain.Target")
+			} else {
+				require.Error(err, "Explain says no match, Fire should fail")
+			}
+		}
+	})
+}
+
+// TestMachine_CanFire_MatchesExplain verifies CanFire agrees with Explain.Matched.
+func TestMachine_CanFire_MatchesExplain(t *testing.T) {
+	type inp struct{ val int }
+	const (
+		sA state = iota
+		sB
+		sC
+	)
+	const tX trigger = 0
+
+	builder := NewBuilder[state, trigger, inp]()
+	builder.From(sA).On(tX).
+		To(sB).When("val==1", func(i inp) bool { return i.val == 1 }).
+		To(sC).When("val==2", func(i inp) bool { return i.val == 2 })
+
+	spec := builder.Build()
+
+	for _, v := range []int{1, 2, 99} {
+		in := inp{val: v}
+		m := New(spec, sA)
+		d := m.Explain(tX, in)
+		can := m.CanFire(t.Context(), tX, in)
+		require.Equal(t, d.Matched, can, "CanFire and Explain.Matched must agree for val=%d", v)
+	}
+}
+
+// TestSpec_MermaidDiagram_MultipleBranches verifies one edge per branch is emitted.
+func TestSpec_MermaidDiagram_MultipleBranches(t *testing.T) {
+	require := require.New(t)
+
+	// Use the package-level state/trigger types which have String() methods.
+	// locked=0, unlocked=1, root=2 — use these as sA, sB, sC.
+	builder := NewBuilder[state, trigger, input]()
+	builder.From(locked).On(lock).
+		To(unlocked).When("cond1", func(input) bool { return true }).
+		To(root).When("cond2", func(input) bool { return false })
+
+	spec := builder.Build()
+	diagram := spec.MermaidJSDiagram()
+
+	require.Contains(diagram, "locked --> unlocked : lock [cond1]")
+	require.Contains(diagram, "locked --> root : lock [cond2]")
 }
