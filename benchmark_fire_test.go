@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Dummy states, triggers, and input types for benchmarking
+// Dummy states, triggers, and payload types for benchmarking
 const (
 	stateA = iota
 	stateB
@@ -65,10 +65,10 @@ const (
 	triggerZ
 )
 
-type dummyInput struct{}
+type dummyPayload struct{}
 
-func setupBenchmarkFSM() *Machine[uint, uint, dummyInput] {
-	builder := NewBuilder[uint, uint, dummyInput]()
+func setupBenchmarkFSM() *Machine[uint, uint, dummyPayload] {
+	builder := NewBuilder[uint, uint, dummyPayload]()
 	builder.From(stateA).On(triggerA).To(stateB)
 	builder.From(stateB).On(triggerA).To(stateC)
 	builder.From(stateC).On(triggerA).To(stateD)
@@ -102,41 +102,41 @@ func setupBenchmarkFSM() *Machine[uint, uint, dummyInput] {
 func BenchmarkFire(b *testing.B) {
 	ctx := context.Background()
 	fsm := setupBenchmarkFSM()
-	input := dummyInput{}
+	payload := dummyPayload{}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = fsm.Fire(ctx, triggerA, input)
+		_ = fsm.Fire(ctx, triggerA, payload)
 	}
 }
 
 func BenchmarkFire_SingleConditional(b *testing.B) {
 	ctx := context.Background()
-	builder := NewBuilder[uint, uint, dummyInput]()
-	builder.From(stateA).On(triggerA).To(stateB).When("always true", func(dummyInput) bool { return true })
+	builder := NewBuilder[uint, uint, dummyPayload]()
+	builder.From(stateA).On(triggerA).To(stateB).When("always true", func(dummyPayload) bool { return true })
 	builder.From(stateB).On(triggerA).To(stateA)
 	fsm := New(builder.Build(), stateA)
-	input := dummyInput{}
+	payload := dummyPayload{}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = fsm.Fire(ctx, triggerA, input)
+		_ = fsm.Fire(ctx, triggerA, payload)
 	}
 }
 
 func BenchmarkFire_Branching(b *testing.B) {
 	ctx := context.Background()
-	builder := NewBuilder[uint, uint, dummyInput]()
+	builder := NewBuilder[uint, uint, dummyPayload]()
 	// 3 branches: first two have conditions that return false, last one is Otherwise (unconditional).
 	builder.From(stateA).On(triggerA).
-		To(stateB).When("false1", func(dummyInput) bool { return false }).
-		To(stateC).When("false2", func(dummyInput) bool { return false }).
+		To(stateB).When("false1", func(dummyPayload) bool { return false }).
+		To(stateC).When("false2", func(dummyPayload) bool { return false }).
 		Otherwise(stateD)
 	builder.From(stateB).On(triggerA).To(stateA)
 	builder.From(stateC).On(triggerA).To(stateA)
 	builder.From(stateD).On(triggerA).To(stateA)
 	fsm := New(builder.Build(), stateA)
-	input := dummyInput{}
+	payload := dummyPayload{}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = fsm.Fire(ctx, triggerA, input)
+		_ = fsm.Fire(ctx, triggerA, payload)
 	}
 }

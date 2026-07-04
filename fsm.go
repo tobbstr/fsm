@@ -2,7 +2,7 @@
 //
 // Features:
 //   - Simple API for defining states, triggers, and transitions.
-//   - Stimuli-based transitions: the trigger and input together form the stimuli that attempt to stimulate
+//   - Stimuli-based transitions: the trigger and payload together form the stimuli that attempt to stimulate
 //     the FSM to move into another state.
 //   - Side effects via transition actions and state entry/exit hooks.
 //   - Fine-grained control with guarded branches using boolean conditions.
@@ -19,14 +19,14 @@
 //	type State uint
 //	type Trigger uint
 //
-//	// Define your input type (per-call business data).
-//	type OrderInput struct {
+//	// Define your payload type (per-call business data).
+//	type OrderPayload struct {
 //		OrderID    string
 //		CustomerID string
 //	}
 //
 //	// Create a new FSM specification builder.
-//	builder := fsm.NewBuilder[State, Trigger, OrderInput]()
+//	builder := fsm.NewBuilder[State, Trigger, OrderPayload]()
 //
 //	// Define transitions and state hooks.
 //	builder.From(...).On(...).To(...).Do(...).When(...)
@@ -39,7 +39,7 @@
 //	machine := fsm.New(spec, initialState)
 //
 //	// Fire triggers to perform transitions with business data.
-//	err := machine.Fire(ctx, trigger, OrderInput{OrderID: "123", CustomerID: "456"})
+//	err := machine.Fire(ctx, trigger, OrderPayload{OrderID: "123", CustomerID: "456"})
 //
 // Dependency Injection Pattern:
 //
@@ -53,16 +53,16 @@
 //	}
 //
 //	// Create spec with services captured via closure.
-//	func SetupOrderFSM(services Services) *fsm.Spec[State, Trigger, OrderInput] {
-//		builder := fsm.NewBuilder[State, Trigger, OrderInput]()
+//	func SetupOrderFSM(services Services) *fsm.Spec[State, Trigger, OrderPayload] {
+//		builder := fsm.NewBuilder[State, Trigger, OrderPayload]()
 //
 //		// Services are captured from outer scope.
 //		builder.
 //			From(Pending).On(Confirm).To(Confirmed).
-//			Do("save order", func(ctx context.Context, input OrderInput) error {
+//			Do("save order", func(ctx context.Context, payload OrderPayload) error {
 //				// Access services via closure - clean and type-safe.
-//				services.Logger.Printf("Confirming order %s", input.OrderID)
-//				return saveOrder(services.DB, input.OrderID)
+//				services.Logger.Printf("Confirming order %s", payload.OrderID)
+//				return saveOrder(services.DB, payload.OrderID)
 //			})
 //
 //		return builder.Build()
@@ -71,7 +71,7 @@
 //	// Usage: Clean call sites with only business data.
 //	spec := SetupOrderFSM(services)
 //	machine := fsm.New(spec, Pending)
-//	machine.Fire(ctx, Confirm, OrderInput{OrderID: "123"})
+//	machine.Fire(ctx, Confirm, OrderPayload{OrderID: "123"})
 //
 // See README.md and examples for more details.
 package fsm
@@ -92,31 +92,31 @@ var (
 
 type (
 	// Condition is a predicate that determines whether a branch is taken.
-	Condition[Input any] func(input Input) bool
+	Condition[Payload any] func(payload Payload) bool
 	// Action is a function that performs an action when a transition occurs.
-	Action[Input any] func(ctx context.Context, input Input) error
+	Action[Payload any] func(ctx context.Context, payload Payload) error
 )
 
 // branch is one candidate transition within a (from, trigger) group.
-type branch[S ~uint, Input any] struct {
+type branch[S ~uint, Payload any] struct {
 	next       S
-	cond       Condition[Input] // nil = unconditional (always matches)
+	cond       Condition[Payload] // nil = unconditional (always matches)
 	condDesc   string
-	action     Action[Input]
+	action     Action[Payload]
 	actionDesc string
 }
 
 // slot holds all branches for one (from, trigger), in definition order.
 // Inline first keeps the overwhelmingly common single-branch case allocation-free;
 // more is nil unless the group actually has multiple branches.
-type slot[S ~uint, Input any] struct {
+type slot[S ~uint, Payload any] struct {
 	valid bool
-	first branch[S, Input]
-	more  []branch[S, Input] // nil for single-branch groups
+	first branch[S, Payload]
+	more  []branch[S, Payload] // nil for single-branch groups
 }
 
 // match returns the first branch whose condition is nil or returns true, else nil. No allocation.
-func (s *slot[S, Input]) match(in Input) *branch[S, Input] {
+func (s *slot[S, Payload]) match(in Payload) *branch[S, Payload] {
 	if s.first.cond == nil || s.first.cond(in) {
 		return &s.first
 	}
@@ -128,17 +128,27 @@ func (s *slot[S, Input]) match(in Input) *branch[S, Input] {
 	return nil
 }
 
+// all returns a flat, definition-ordered view of every branch in the slot (first, then more).
+// It allocates, so it is used only on cold paths (Build validation, Explain, diagram generation) —
+// never by match/Fire/CanFire on the zero-alloc hot path.
+func (s *slot[S, Payload]) all() []branch[S, Payload] {
+	branches := make([]branch[S, Payload], 0, 1+len(s.more))
+	branches = append(branches, s.first)
+	branches = append(branches, s.more...)
+	return branches
+}
+
 // StateHooks represents hooks that can be triggered on state entry and exit.
-type StateHooks[Input any] struct {
-	OnEntry Action[Input]
-	OnExit  Action[Input]
+type StateHooks[Payload any] struct {
+	OnEntry Action[Payload]
+	OnExit  Action[Payload]
 }
 
 // Builder builds FSM specifications. Create one with NewBuilder.
-type Builder[S, T ~uint, Input any] struct {
-	branchDefs    []*branchDef[S, T, Input]
-	onSteps       []*onStep[S, T, Input]
-	stateBuilders []*stateBuilder[S, T, Input]
+type Builder[S, T ~uint, Payload any] struct {
+	branchDefs    []*branchDef[S, T, Payload]
+	onSteps       []*onStep[S, T, Payload]
+	stateBuilders []*stateBuilder[S, T, Payload]
 }
 
 // NewBuilder creates a new Builder used for building FSM specifications which define the states, triggers
@@ -147,63 +157,64 @@ type Builder[S, T ~uint, Input any] struct {
 // The number of states and triggers is derived automatically from the definitions added to the builder, so there is
 // no need to declare them up front. Build() sizes the specification to fit the highest state and trigger index
 // referenced by any transition or state definition.
-func NewBuilder[S, T ~uint, Input any]() *Builder[S, T, Input] {
-	return &Builder[S, T, Input]{}
+func NewBuilder[S, T ~uint, Payload any]() *Builder[S, T, Payload] {
+	return &Builder[S, T, Payload]{}
 }
 
 // branchDef accumulates the fields for one branch in definition order.
-type branchDef[S, T ~uint, Input any] struct {
+type branchDef[S, T ~uint, Payload any] struct {
 	from       S
 	trigger    T
 	to         S
-	cond       Condition[Input]
+	cond       Condition[Payload]
 	condDesc   string
-	action     Action[Input]
+	action     Action[Payload]
 	actionDesc string
 	isDefault  bool // set by Otherwise
 }
 
 // onStep tracks that an On() call was made and whether a To() completed it.
-type onStep[S, T ~uint, Input any] struct {
-	b        *Builder[S, T, Input]
+type onStep[S, T ~uint, Payload any] struct {
+	b        *Builder[S, T, Payload]
 	from     S
 	trigger  T
 	consumed bool
 }
 
 // fromStep is returned by Builder.From.
-type fromStep[S, T ~uint, Input any] struct {
-	b    *Builder[S, T, Input]
+type fromStep[S, T ~uint, Payload any] struct {
+	b    *Builder[S, T, Payload]
 	from S
 }
 
 // branchStep is returned after To() and allows chaining When/Do/To/Otherwise.
-type branchStep[S, T ~uint, Input any] struct {
-	b       *Builder[S, T, Input]
-	cur     *branchDef[S, T, Input]
+type branchStep[S, T ~uint, Payload any] struct {
+	b       *Builder[S, T, Payload]
+	cur     *branchDef[S, T, Payload]
 	from    S
 	trigger T
 }
 
 // From begins the definition of a new transition group.
-func (b *Builder[S, T, Input]) From(state S) *fromStep[S, T, Input] {
-	return &fromStep[S, T, Input]{b: b, from: state}
+func (b *Builder[S, T, Payload]) From(state S) *fromStep[S, T, Payload] {
+	return &fromStep[S, T, Payload]{b: b, from: state}
 }
 
 // WithHooks sets the OnEntry and OnExit hooks for the state being defined.
-func (fs *fromStep[S, T, Input]) WithHooks(hooks StateHooks[Input]) *fromStep[S, T, Input] {
-	sb := &stateBuilder[S, T, Input]{
-		b:     fs.b,
-		state: fs.from,
-		hooks: hooks,
+func (fs *fromStep[S, T, Payload]) WithHooks(hooks StateHooks[Payload]) *fromStep[S, T, Payload] {
+	sb := &stateBuilder[S, T, Payload]{
+		b:          fs.b,
+		state:      fs.from,
+		hooks:      hooks,
+		isHooksSet: true,
 	}
 	fs.b.stateBuilders = append(fs.b.stateBuilders, sb)
 	return fs
 }
 
 // WithParent sets the parent state for hierarchical state machines.
-func (fs *fromStep[S, T, Input]) WithParent(parent S) *fromStep[S, T, Input] {
-	sb := &stateBuilder[S, T, Input]{
+func (fs *fromStep[S, T, Payload]) WithParent(parent S) *fromStep[S, T, Payload] {
+	sb := &stateBuilder[S, T, Payload]{
 		b:           fs.b,
 		state:       fs.from,
 		parent:      parent,
@@ -214,8 +225,8 @@ func (fs *fromStep[S, T, Input]) WithParent(parent S) *fromStep[S, T, Input] {
 }
 
 // WithInitial sets the initial sub-state for hierarchical state machines.
-func (fs *fromStep[S, T, Input]) WithInitial(initial S) *fromStep[S, T, Input] {
-	sb := &stateBuilder[S, T, Input]{
+func (fs *fromStep[S, T, Payload]) WithInitial(initial S) *fromStep[S, T, Payload] {
+	sb := &stateBuilder[S, T, Payload]{
 		b:                 fs.b,
 		state:             fs.from,
 		initialState:      initial,
@@ -226,52 +237,52 @@ func (fs *fromStep[S, T, Input]) WithInitial(initial S) *fromStep[S, T, Input] {
 }
 
 // On sets the trigger for the transition group.
-func (fs *fromStep[S, T, Input]) On(trigger T) *onStep[S, T, Input] {
-	os := &onStep[S, T, Input]{b: fs.b, from: fs.from, trigger: trigger}
+func (fs *fromStep[S, T, Payload]) On(trigger T) *onStep[S, T, Payload] {
+	os := &onStep[S, T, Payload]{b: fs.b, from: fs.from, trigger: trigger}
 	fs.b.onSteps = append(fs.b.onSteps, os)
 	return os
 }
 
 // To opens the first branch of the group with the given target state.
-func (os *onStep[S, T, Input]) To(state S) *branchStep[S, T, Input] {
+func (os *onStep[S, T, Payload]) To(state S) *branchStep[S, T, Payload] {
 	os.consumed = true
-	def := &branchDef[S, T, Input]{from: os.from, trigger: os.trigger, to: state}
+	def := &branchDef[S, T, Payload]{from: os.from, trigger: os.trigger, to: state}
 	os.b.branchDefs = append(os.b.branchDefs, def)
-	return &branchStep[S, T, Input]{b: os.b, cur: def, from: os.from, trigger: os.trigger}
+	return &branchStep[S, T, Payload]{b: os.b, cur: def, from: os.from, trigger: os.trigger}
 }
 
 // When sets a boolean condition and its description on the current branch.
-func (bs *branchStep[S, T, Input]) When(desc string, cond func(Input) bool) *branchStep[S, T, Input] {
+func (bs *branchStep[S, T, Payload]) When(desc string, cond func(Payload) bool) *branchStep[S, T, Payload] {
 	bs.cur.cond = cond
 	bs.cur.condDesc = desc
 	return bs
 }
 
 // Do sets an action and its description on the current branch.
-func (bs *branchStep[S, T, Input]) Do(desc string, action func(ctx context.Context, in Input) error) *branchStep[S, T, Input] {
+func (bs *branchStep[S, T, Payload]) Do(desc string, action func(ctx context.Context, in Payload) error) *branchStep[S, T, Payload] {
 	bs.cur.action = action
 	bs.cur.actionDesc = desc
 	return bs
 }
 
 // To closes the current branch and opens the next branch in the same group.
-func (bs *branchStep[S, T, Input]) To(state S) *branchStep[S, T, Input] {
-	def := &branchDef[S, T, Input]{from: bs.from, trigger: bs.trigger, to: state}
+func (bs *branchStep[S, T, Payload]) To(state S) *branchStep[S, T, Payload] {
+	def := &branchDef[S, T, Payload]{from: bs.from, trigger: bs.trigger, to: state}
 	bs.b.branchDefs = append(bs.b.branchDefs, def)
 	bs.cur = def
 	return bs
 }
 
 // Otherwise opens the final unconditional fallback branch.
-func (bs *branchStep[S, T, Input]) Otherwise(state S) *branchStep[S, T, Input] {
-	def := &branchDef[S, T, Input]{from: bs.from, trigger: bs.trigger, to: state, isDefault: true}
+func (bs *branchStep[S, T, Payload]) Otherwise(state S) *branchStep[S, T, Payload] {
+	def := &branchDef[S, T, Payload]{from: bs.from, trigger: bs.trigger, to: state, isDefault: true}
 	bs.b.branchDefs = append(bs.b.branchDefs, def)
 	bs.cur = def
 	return bs
 }
 
 // Build finalizes the FSM specification and returns a new Spec instance.
-func (b *Builder[S, T, Input]) Build() *Spec[S, T, Input] {
+func (b *Builder[S, T, Payload]) Build() *Spec[S, T, Payload] {
 	// Completion check: every On() must have a following To().
 	for _, os := range b.onSteps {
 		if !os.consumed {
@@ -307,15 +318,15 @@ func (b *Builder[S, T, Input]) Build() *Spec[S, T, Input] {
 	stateCount := maxState + 1
 	triggerCount := maxTrigger + 1
 
-	slots := make([]slot[S, Input], stateCount*triggerCount)
-	stateHooks := make([]StateHooks[Input], stateCount)
+	slots := make([]slot[S, Payload], stateCount*triggerCount)
+	stateHooks := make([]StateHooks[Payload], stateCount)
 	stateParents := make([]*S, stateCount)
 	initialStates := make([]*S, stateCount)
 
 	// Group branchDefs into slots in definition order.
 	for _, def := range b.branchDefs {
 		idx := transitionIndex(def.from, def.trigger, triggerCount)
-		br := branch[S, Input]{
+		br := branch[S, Payload]{
 			next:       def.to,
 			cond:       def.cond,
 			condDesc:   def.condDesc,
@@ -339,9 +350,7 @@ func (b *Builder[S, T, Input]) Build() *Spec[S, T, Input] {
 				continue
 			}
 			// Build a flat view to check ordering.
-			branches := make([]branch[S, Input], 0, 1+len(s.more))
-			branches = append(branches, s.first)
-			branches = append(branches, s.more...)
+			branches := s.all()
 			for i, br := range branches {
 				if br.cond == nil && i < len(branches)-1 {
 					panic(fmt.Sprintf(
@@ -355,7 +364,9 @@ func (b *Builder[S, T, Input]) Build() *Spec[S, T, Input] {
 
 	// Finalize state builders.
 	for _, sb := range b.stateBuilders {
-		stateHooks[sb.state] = sb.hooks
+		if sb.isHooksSet {
+			stateHooks[sb.state] = sb.hooks
+		}
 		if sb.isParentSet {
 			parent := sb.parent
 			stateParents[sb.state] = &parent
@@ -394,7 +405,7 @@ func (b *Builder[S, T, Input]) Build() *Spec[S, T, Input] {
 		}
 	}
 
-	return &Spec[S, T, Input]{
+	return &Spec[S, T, Payload]{
 		stateCount:    stateCount,
 		triggerCount:  triggerCount,
 		slots:         slots,
@@ -410,10 +421,11 @@ func transitionIndex[S, T ~uint](from S, trigger T, numTrigger uint) int {
 
 // stateBuilder holds a single state-configuration fragment (hooks, parent, or initial substate) produced by
 // fromStep's WithHooks/WithParent/WithInitial methods. Build() merges all fragments for a given state.
-type stateBuilder[S, T ~uint, Input any] struct {
-	b                 *Builder[S, T, Input]
+type stateBuilder[S, T ~uint, Payload any] struct {
+	b                 *Builder[S, T, Payload]
 	state             S
-	hooks             StateHooks[Input]
+	hooks             StateHooks[Payload]
+	isHooksSet        bool
 	parent            S
 	isParentSet       bool
 	initialState      S
@@ -422,17 +434,17 @@ type stateBuilder[S, T ~uint, Input any] struct {
 
 // Spec represents the specification of the FSM, including its states, triggers, and transitions. It is safe to make
 // shallow copies of the Spec as it is read-only, making it thread-safe.
-type Spec[S, T ~uint, Input any] struct {
+type Spec[S, T ~uint, Payload any] struct {
 	stateCount    uint
 	triggerCount  uint
-	slots         []slot[S, Input]
-	stateHooks    []StateHooks[Input]
+	slots         []slot[S, Payload]
+	stateHooks    []StateHooks[Payload]
 	stateParents  []*S
 	initialStates []*S
 }
 
 // MermaidJSDiagram returns a state diagram in Mermaid.js syntax for the FSM Spec.
-func (spec *Spec[S, T, Input]) MermaidJSDiagram() string {
+func (spec *Spec[S, T, Payload]) MermaidJSDiagram() string {
 	diagram := "stateDiagram-v2\n"
 	for from := uint(0); from < spec.stateCount; from++ {
 		for trigger := uint(0); trigger < spec.triggerCount; trigger++ {
@@ -443,9 +455,7 @@ func (spec *Spec[S, T, Input]) MermaidJSDiagram() string {
 			}
 			fromStr := fmt.Sprintf("%v", S(from))
 			triggerStr := fmt.Sprintf("%v", T(trigger))
-			branches := make([]branch[S, Input], 0, 1+len(s.more))
-			branches = append(branches, s.first)
-			branches = append(branches, s.more...)
+			branches := s.all()
 			for _, br := range branches {
 				toStr := fmt.Sprintf("%v", br.next)
 				guardDesc := ""
@@ -465,26 +475,26 @@ func (spec *Spec[S, T, Input]) MermaidJSDiagram() string {
 
 // Machine is a finite state machine (FSM) instance. It keeps track of its current state and uses the FSM specification
 // to determine valid state transitions and is the executor of defined transition actions and state hooks.
-type Machine[S, T ~uint, Input any] struct {
+type Machine[S, T ~uint, Payload any] struct {
 	state S
-	spec  Spec[S, T, Input]
+	spec  Spec[S, T, Payload]
 }
 
 // New creates a new FSM instance with the given specification and initial state.
-func New[S, T ~uint, Input any](spec *Spec[S, T, Input], initialState S) *Machine[S, T, Input] {
-	return &Machine[S, T, Input]{
+func New[S, T ~uint, Payload any](spec *Spec[S, T, Payload], initialState S) *Machine[S, T, Payload] {
+	return &Machine[S, T, Payload]{
 		spec:  *spec,
 		state: initialState,
 	}
 }
 
 // State returns the current state of the FSM.
-func (m *Machine[S, T, Input]) State() S {
+func (m *Machine[S, T, Payload]) State() S {
 	return m.state
 }
 
 // ActiveHierarchy returns the active hierarchy of states in the FSM.
-func (m *Machine[S, T, Input]) ActiveHierarchy() []S {
+func (m *Machine[S, T, Payload]) ActiveHierarchy() []S {
 	var hierarchy [maxDepth]S
 	i := m.readHierarchy(m.state, &hierarchy)
 	out := hierarchy[:i]
@@ -492,23 +502,23 @@ func (m *Machine[S, T, Input]) ActiveHierarchy() []S {
 }
 
 // IsIn checks if the FSM is currently in the specified state.
-func (m *Machine[S, T, Input]) IsIn(state S) bool {
+func (m *Machine[S, T, Payload]) IsIn(state S) bool {
 	var hierarchy [maxDepth]S
 	i := m.readHierarchy(m.state, &hierarchy)
 	return slices.Contains(hierarchy[:i], state)
 }
 
-// Fire attempts to perform a state transition based on the provided trigger, input and current state.
-// The trigger and input together form the stimuli that attempt to stimulate the FSM to move into another state.
+// Fire attempts to perform a state transition based on the provided trigger, payload and current state.
+// The trigger and payload together form the stimuli that attempt to stimulate the FSM to move into another state.
 //
 // If a defined transition cannot be found for the current state, it will search up the state hierarchy for
 // a valid transition until one is found. If none is found, it will return an ErrNotFound error.
 //
 // If transitions exist for (state, trigger) but no branch's condition matches, it returns ErrTransitionRejected.
 // The error message lists all tried condition descriptions from every rule-bearing level considered.
-func (m *Machine[S, T, Input]) Fire(ctx context.Context, trigger T, input Input) error {
+func (m *Machine[S, T, Payload]) Fire(ctx context.Context, trigger T, payload Payload) error {
 	state := m.state
-	var selected *branch[S, Input]
+	var selected *branch[S, Payload]
 	sawSlot := false
 
 	// Accumulate rejected condition descriptions per level for the error message.
@@ -522,7 +532,7 @@ func (m *Machine[S, T, Input]) Fire(ctx context.Context, trigger T, input Input)
 	for {
 		if s := m.slotAt(trigger, state); s != nil && s.valid {
 			sawSlot = true
-			if b := s.match(input); b != nil {
+			if b := s.match(payload); b != nil {
 				selected = b
 				break
 			}
@@ -586,14 +596,14 @@ outerLoop:
 			break
 		}
 		if onExit := m.spec.stateHooks[st].OnExit; onExit != nil {
-			if err := onExit(ctx, input); err != nil {
+			if err := onExit(ctx, payload); err != nil {
 				return fmt.Errorf("invoking OnExit state hook for state %v: %w", st, err)
 			}
 		}
 	}
 
 	if action := selected.action; action != nil {
-		if err := action(ctx, input); err != nil {
+		if err := action(ctx, payload); err != nil {
 			return fmt.Errorf("invoking transition action from states (%v) to (%v): %w", state, selected.next, err)
 		}
 	}
@@ -610,7 +620,7 @@ outerLoop:
 			continue
 		}
 		if onEntry := m.spec.stateHooks[st].OnEntry; onEntry != nil {
-			if err := onEntry(ctx, input); err != nil {
+			if err := onEntry(ctx, payload); err != nil {
 				return fmt.Errorf("invoking OnEntry state hook for state (%v): %w", st, err)
 			}
 		}
@@ -619,7 +629,7 @@ outerLoop:
 	initialSubstate := m.spec.initialStates[selected.next]
 	if initialSubstate != nil {
 		if onEntry := m.spec.stateHooks[*initialSubstate].OnEntry; onEntry != nil {
-			if err := onEntry(ctx, input); err != nil {
+			if err := onEntry(ctx, payload); err != nil {
 				return fmt.Errorf("invoking OnEntry state hook for state (%v): %w", *initialSubstate, err)
 			}
 		}
@@ -631,17 +641,20 @@ outerLoop:
 	return nil
 }
 
-// CanFire checks if a state transition can be made given the trigger, input, current state and the conditions defined
-// for the transition branches. The trigger and input together form the stimuli that would attempt to stimulate the FSM.
+// CanFire checks if a state transition can be made given the trigger, payload, current state and the conditions defined
+// for the transition branches. The trigger and payload together form the stimuli that would attempt to stimulate the FSM.
 // It returns true if a branch matches, otherwise false.
 //
 // It will search up the state hierarchy for a valid transition until one is found or the root is reached.
 // Implemented on the shared alloc-free walk — never calls Explain.
-func (m *Machine[S, T, Input]) CanFire(ctx context.Context, trigger T, input Input) bool {
+//
+// CanFire takes no context: conditions are pure functions of the payload (no ctx), and CanFire runs no
+// actions, so there is nothing a context could influence. This mirrors Explain, which is likewise ctx-free.
+func (m *Machine[S, T, Payload]) CanFire(trigger T, payload Payload) bool {
 	state := m.state
 	for {
 		if s := m.slotAt(trigger, state); s != nil && s.valid {
-			if b := s.match(input); b != nil {
+			if b := s.match(payload); b != nil {
 				return true
 			}
 			// Slot exists but no branch matched — keep bubbling (same as Fire).
@@ -686,9 +699,9 @@ type Decision[S ~uint] struct {
 	Levels       []LevelVerdict[S] // deepest-first: current state, then ancestors with rules up to the resolver
 }
 
-// Explain reports a multi-level decision trace for what Fire would do with the given trigger and input.
+// Explain reports a multi-level decision trace for what Fire would do with the given trigger and payload.
 // It allocates; never called by Fire or CanFire.
-func (m *Machine[S, T, Input]) Explain(trigger T, in Input) Decision[S] {
+func (m *Machine[S, T, Payload]) Explain(trigger T, in Payload) Decision[S] {
 	state := m.state
 	var levels []LevelVerdict[S]
 
@@ -704,9 +717,7 @@ func (m *Machine[S, T, Input]) Explain(trigger T, in Input) Decision[S] {
 		}
 
 		// Evaluate branches, stopping at first match.
-		branches := make([]branch[S, Input], 0, 1+len(s.more))
-		branches = append(branches, s.first)
-		branches = append(branches, s.more...)
+		branches := s.all()
 
 		var verdicts []BranchVerdict[S]
 		matchIdx := -1
@@ -773,14 +784,14 @@ func (m *Machine[S, T, Input]) Explain(trigger T, in Input) Decision[S] {
 }
 
 // slotAt returns the slot for (state, trigger) with bounds checking, or nil if out of range.
-func (m *Machine[S, T, Input]) slotAt(trigger T, state S) *slot[S, Input] {
+func (m *Machine[S, T, Payload]) slotAt(trigger T, state S) *slot[S, Payload] {
 	if uint(state) >= m.spec.stateCount || uint(trigger) >= m.spec.triggerCount {
 		return nil
 	}
 	return &m.spec.slots[transitionIndex(state, trigger, m.spec.triggerCount)]
 }
 
-func (m *Machine[S, T, Input]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
+func (m *Machine[S, T, Payload]) readHierarchy(fromState S, hierarchy *[maxDepth]S) int {
 	state := fromState
 	i := 0
 	for i < maxDepth {

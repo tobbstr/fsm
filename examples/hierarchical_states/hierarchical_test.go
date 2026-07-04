@@ -54,7 +54,7 @@ func (t trigger) String() string {
 	}
 }
 
-type input struct{}
+type payload struct{}
 
 var handleError = func(err error) {
 	// .. handle error ..
@@ -78,7 +78,7 @@ func TestHierarchicalStates(t *testing.T) {
 	// and then down to the target state (Grandchild B). On the way up the states' OnExit hooks will be called and on
 	// the way down the OnEntry hooks will be called.
 
-	builder := fsm.NewBuilder[state, trigger, input]() // states and triggers derived automatically
+	builder := fsm.NewBuilder[state, trigger, payload]() // states and triggers derived automatically
 
 	// Hierarchy setup
 	builder.From(Parent).WithParent(Root)
@@ -92,11 +92,11 @@ func TestHierarchicalStates(t *testing.T) {
 		From(GrandchildA).
 		On(ChangeFocus).
 		To(GrandchildB).
-		Do("printTransition()", func(ctx context.Context, p input) error {
+		Do("printTransition()", func(ctx context.Context, p payload) error {
 			fmt.Println("Transitioning from GrandchildA to GrandchildB")
 			return nil
 		}).
-		When("no-op", func(p input) bool {
+		When("no-op", func(p payload) bool {
 			fmt.Println("Checking transition from GrandchildA to GrandchildB")
 			return true
 		})
@@ -104,12 +104,12 @@ func TestHierarchicalStates(t *testing.T) {
 	// State hooks for all states
 	for _, s := range []state{Root, Parent, ChildA, GrandchildA, ChildB, GrandchildB} {
 		builder.From(s).
-			WithHooks(fsm.StateHooks[input]{
-				OnEntry: func(ctx context.Context, p input) error {
+			WithHooks(fsm.StateHooks[payload]{
+				OnEntry: func(ctx context.Context, p payload) error {
 					fmt.Printf("Entering %v state\n", s)
 					return nil
 				},
-				OnExit: func(ctx context.Context, p input) error {
+				OnExit: func(ctx context.Context, p payload) error {
 					fmt.Printf("Exiting %v state\n", s)
 					return nil
 				},
@@ -120,7 +120,7 @@ func TestHierarchicalStates(t *testing.T) {
 	m := fsm.New(spec, GrandchildA) // Initial state is GrandchildA
 
 	fmt.Printf("Current state: %v\n", m.State())
-	err := m.Fire(context.Background(), ChangeFocus, input{})
+	err := m.Fire(context.Background(), ChangeFocus, payload{})
 	handleError(err)
 	fmt.Printf("Current state: %v\n", m.State())
 }
