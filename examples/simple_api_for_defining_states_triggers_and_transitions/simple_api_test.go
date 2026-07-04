@@ -82,9 +82,9 @@ func TestSimpleAPI(t *testing.T) {
 
 	// Define transition from red to yellow.
 	builder.
-		From(red).    // The state from which this transition is valid.
-		On(next).     // The trigger that causes the transition.
-		To(yellow).   // The state to transition to.
+		From(red).                                                                   // The state from which this transition is valid.
+		On(next).                                                                    // The trigger that causes the transition.
+		To(yellow).                                                                  // The state to transition to.
 		Do("transitionToYellow", func(ctx context.Context, input OrderInput) error { // The action to perform during the transition.
 			// Services are captured from outer scope via Go closures.
 			// This keeps the Fire() call site clean!
@@ -117,44 +117,50 @@ func TestSimpleAPI(t *testing.T) {
 
 	// Define state hooks for red.
 	builder.
-		State(red). // Configures the `red` state.
-		OnEntry(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `red` state.
-			_ = services
-			fmt.Printf("Order %s entering red state\n", input.OrderID)
-			return nil
-		}).
-		OnExit(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `red` state.
-			_ = services
-			fmt.Printf("Order %s exiting red state\n", input.OrderID)
-			return nil
+		From(red). // Configures the `red` state.
+		WithHooks(fsm.StateHooks[OrderInput]{
+			OnEntry: func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `red` state.
+				_ = services
+				fmt.Printf("Order %s entering red state\n", input.OrderID)
+				return nil
+			},
+			OnExit: func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `red` state.
+				_ = services
+				fmt.Printf("Order %s exiting red state\n", input.OrderID)
+				return nil
+			},
 		})
 
 	// Define state hooks for yellow.
 	builder.
-		State(yellow). // Configures the `yellow` state.
-		OnEntry(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `yellow` state.
-			_ = services
-			fmt.Printf("Order %s entering yellow state\n", input.OrderID)
-			return nil
-		}).
-		OnExit(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `yellow` state.
-			_ = services
-			fmt.Printf("Order %s exiting yellow state\n", input.OrderID)
-			return nil
+		From(yellow). // Configures the `yellow` state.
+		WithHooks(fsm.StateHooks[OrderInput]{
+			OnEntry: func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `yellow` state.
+				_ = services
+				fmt.Printf("Order %s entering yellow state\n", input.OrderID)
+				return nil
+			},
+			OnExit: func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `yellow` state.
+				_ = services
+				fmt.Printf("Order %s exiting yellow state\n", input.OrderID)
+				return nil
+			},
 		})
 
 	// Define state hooks for green.
 	builder.
-		State(green). // Configures the `green` state.
-		OnEntry(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `green` state.
-			_ = services
-			fmt.Printf("Order %s entering green state\n", input.OrderID)
-			return nil
-		}).
-		OnExit(func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `green` state.
-			_ = services
-			fmt.Printf("Order %s exiting green state\n", input.OrderID)
-			return nil
+		From(green). // Configures the `green` state.
+		WithHooks(fsm.StateHooks[OrderInput]{
+			OnEntry: func(ctx context.Context, input OrderInput) error { // Called whenever transitioning into the `green` state.
+				_ = services
+				fmt.Printf("Order %s entering green state\n", input.OrderID)
+				return nil
+			},
+			OnExit: func(ctx context.Context, input OrderInput) error { // Called whenever transitioning out of the `green` state.
+				_ = services
+				fmt.Printf("Order %s exiting green state\n", input.OrderID)
+				return nil
+			},
 		})
 
 	// Only initialize this once as it is read-only, meaning thread-safe.

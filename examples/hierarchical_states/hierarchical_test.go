@@ -81,11 +81,11 @@ func TestHierarchicalStates(t *testing.T) {
 	builder := fsm.NewBuilder[state, trigger, input]() // states and triggers derived automatically
 
 	// Hierarchy setup
-	builder.State(Parent).Parent(Root)
-	builder.State(ChildA).Parent(Parent)
-	builder.State(GrandchildA).Parent(ChildA)
-	builder.State(ChildB).Parent(Parent)
-	builder.State(GrandchildB).Parent(ChildB)
+	builder.From(Parent).WithParent(Root)
+	builder.From(ChildA).WithParent(Parent)
+	builder.From(GrandchildA).WithParent(ChildA)
+	builder.From(ChildB).WithParent(Parent)
+	builder.From(GrandchildB).WithParent(ChildB)
 
 	// Sole transition: GrandchildA -> GrandchildB
 	builder.
@@ -103,14 +103,16 @@ func TestHierarchicalStates(t *testing.T) {
 
 	// State hooks for all states
 	for _, s := range []state{Root, Parent, ChildA, GrandchildA, ChildB, GrandchildB} {
-		builder.State(s).
-			OnEntry(func(ctx context.Context, p input) error {
-				fmt.Printf("Entering %v state\n", s)
-				return nil
-			}).
-			OnExit(func(ctx context.Context, p input) error {
-				fmt.Printf("Exiting %v state\n", s)
-				return nil
+		builder.From(s).
+			WithHooks(fsm.StateHooks[input]{
+				OnEntry: func(ctx context.Context, p input) error {
+					fmt.Printf("Entering %v state\n", s)
+					return nil
+				},
+				OnExit: func(ctx context.Context, p input) error {
+					fmt.Printf("Exiting %v state\n", s)
+					return nil
+				},
 			})
 	}
 

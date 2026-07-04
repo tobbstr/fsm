@@ -30,7 +30,7 @@
 //
 //	// Define transitions and state hooks.
 //	builder.From(...).On(...).To(...).Do(...).When(...)
-//	builder.State(...).OnEntry(...).OnExit(...).Parent(...).Initial(...)
+//	builder.From(...).WithHooks(fsm.StateHooks{...}).WithParent(...).WithInitial(...)
 //
 //	// Build the FSM specification (thread-safe, read-only).
 //	spec := builder.Build()
@@ -190,6 +190,41 @@ func (b *Builder[S, T, Input]) From(state S) *fromStep[S, T, Input] {
 	return &fromStep[S, T, Input]{b: b, from: state}
 }
 
+// WithHooks sets the OnEntry and OnExit hooks for the state being defined.
+func (fs *fromStep[S, T, Input]) WithHooks(hooks StateHooks[Input]) *fromStep[S, T, Input] {
+	sb := &stateBuilder[S, T, Input]{
+		b:     fs.b,
+		state: fs.from,
+		hooks: hooks,
+	}
+	fs.b.stateBuilders = append(fs.b.stateBuilders, sb)
+	return fs
+}
+
+// WithParent sets the parent state for hierarchical state machines.
+func (fs *fromStep[S, T, Input]) WithParent(parent S) *fromStep[S, T, Input] {
+	sb := &stateBuilder[S, T, Input]{
+		b:           fs.b,
+		state:       fs.from,
+		parent:      parent,
+		isParentSet: true,
+	}
+	fs.b.stateBuilders = append(fs.b.stateBuilders, sb)
+	return fs
+}
+
+// WithInitial sets the initial sub-state for hierarchical state machines.
+func (fs *fromStep[S, T, Input]) WithInitial(initial S) *fromStep[S, T, Input] {
+	sb := &stateBuilder[S, T, Input]{
+		b:                 fs.b,
+		state:             fs.from,
+		initialState:      initial,
+		isInitialStateSet: true,
+	}
+	fs.b.stateBuilders = append(fs.b.stateBuilders, sb)
+	return fs
+}
+
 // On sets the trigger for the transition group.
 func (fs *fromStep[S, T, Input]) On(trigger T) *onStep[S, T, Input] {
 	os := &onStep[S, T, Input]{b: fs.b, from: fs.from, trigger: trigger}
@@ -233,16 +268,6 @@ func (bs *branchStep[S, T, Input]) Otherwise(state S) *branchStep[S, T, Input] {
 	bs.b.branchDefs = append(bs.b.branchDefs, def)
 	bs.cur = def
 	return bs
-}
-
-// State begins the definition of a new state.
-func (b *Builder[S, T, Input]) State(state S) *stateBuilder[S, T, Input] {
-	sb := &stateBuilder[S, T, Input]{
-		b:     b,
-		state: state,
-	}
-	b.stateBuilders = append(b.stateBuilders, sb)
-	return sb
 }
 
 // Build finalizes the FSM specification and returns a new Spec instance.
@@ -383,6 +408,8 @@ func transitionIndex[S, T ~uint](from S, trigger T, numTrigger uint) int {
 	return int(uint(from)*numTrigger + uint(trigger))
 }
 
+// stateBuilder holds a single state-configuration fragment (hooks, parent, or initial substate) produced by
+// fromStep's WithHooks/WithParent/WithInitial methods. Build() merges all fragments for a given state.
 type stateBuilder[S, T ~uint, Input any] struct {
 	b                 *Builder[S, T, Input]
 	state             S
@@ -391,35 +418,6 @@ type stateBuilder[S, T ~uint, Input any] struct {
 	isParentSet       bool
 	initialState      S
 	isInitialStateSet bool
-}
-
-// OnEntry sets the OnEntry hook for the state. It is called when the state is entered.
-func (sb *stateBuilder[S, T, Input]) OnEntry(action Action[Input]) *stateBuilder[S, T, Input] {
-	sb.hooks.OnEntry = action
-	return sb
-}
-
-// OnExit sets the OnExit hook for the state. It is called when the state is exited.
-func (sb *stateBuilder[S, T, Input]) OnExit(action Action[Input]) *stateBuilder[S, T, Input] {
-	sb.hooks.OnExit = action
-	return sb
-}
-
-// Parent sets the parent state for hierarchical state machines.
-func (sb *stateBuilder[S, T, Input]) Parent(state S) *stateBuilder[S, T, Input] {
-	sb.parent = state
-	sb.isParentSet = true
-	return sb
-}
-
-// Initial sets the initial sub-state for hierarchical state machines.
-//
-// NOTE: If set, the initial state MUST have the same parent as the state it is being defined on. Otherwise,
-// the call to build the FSM specification will panic.
-func (sb *stateBuilder[S, T, Input]) Initial(state S) *stateBuilder[S, T, Input] {
-	sb.initialState = state
-	sb.isInitialStateSet = true
-	return sb
 }
 
 // Spec represents the specification of the FSM, including its states, triggers, and transitions. It is safe to make

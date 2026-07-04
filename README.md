@@ -668,14 +668,16 @@ States can have `OnEntry` and `OnExit` hooks that run when entering or leaving a
 
 ```go
 // Assuming services is captured from outer scope
-builder.State(stateShipped).
-    OnEntry(func(ctx context.Context, input OrderInput) error {
-        // Called when entering the "shipped" state
-        return services.Analytics.TrackEvent(ctx, "order_shipped", input.OrderID)
-    }).
-    OnExit(func(ctx context.Context, input OrderInput) error {
-        // Called when leaving the "shipped" state
-        return services.Cache.Invalidate(ctx, input.OrderID)
+builder.From(stateShipped).
+    WithHooks(fsm.StateHooks[OrderInput]{
+        OnEntry: func(ctx context.Context, input OrderInput) error {
+            // Called when entering the "shipped" state
+            return services.Analytics.TrackEvent(ctx, "order_shipped", input.OrderID)
+        },
+        OnExit: func(ctx context.Context, input OrderInput) error {
+            // Called when leaving the "shipped" state
+            return services.Cache.Invalidate(ctx, input.OrderID)
+        },
     })
 ```
 
@@ -697,8 +699,8 @@ Hierarchical states allow you to model complex state machines with parent-child 
 builder := fsm.NewBuilder[state, trigger, input]()
 
 // Define parent-child relationships
-builder.State(stateChild).Parent(stateParent)
-builder.State(stateGrandchild).Parent(stateChild)
+builder.From(stateChild).WithParent(stateParent)
+builder.From(stateGrandchild).WithParent(stateChild)
 ```
 
 ### Trigger Bubbling
@@ -723,8 +725,8 @@ If a child state *has* a slot for the trigger but no branch matches, the FSM sti
 When transitioning to a state with an initial substate, the FSM automatically enters that substate:
 
 ```go
-builder.State(stateParent).Initial(stateDefaultChild)
-builder.State(stateDefaultChild).Parent(stateParent)
+builder.From(stateParent).WithInitial(stateDefaultChild)
+builder.From(stateDefaultChild).WithParent(stateParent)
 
 builder.From(stateA).On(triggerX).To(stateParent)
 
@@ -865,11 +867,9 @@ See [fsm.go](fsm.go) for full API documentation and comments.
 - `.Do(desc string, action Action[Input])` - Add an action to the current branch
 - `.To(S)` *(on branchStep)* - Close the current branch and open the next in the same group
 - `.Otherwise(S)` - Open the final unconditional fallback branch (must be last)
-- `.State(S)` - Configure a state
-- `.OnEntry(action Action[Input])` - Add an entry hook to a state
-- `.OnExit(action Action[Input])` - Add an exit hook to a state
-- `.Parent(S)` - Set parent state for hierarchical FSMs
-- `.Initial(S)` - Set initial substate for hierarchical FSMs
+- `.From(S).WithHooks(StateHooks[Input])` - Set entry/exit hooks for a state
+- `.From(S).WithParent(S)` - Set parent state for hierarchical FSMs
+- `.From(S).WithInitial(S)` - Set initial substate for hierarchical FSMs
 - `.Build()` - Build the FSM specification
 
 ### Machine API
