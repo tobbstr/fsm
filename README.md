@@ -652,17 +652,17 @@ Chain `.To(target).When(desc, cond)` for each guarded branch. Use `.Otherwise(ta
 
 ```go
 builder.From(Pending).On(Withdraw).
-    To(Completed).When("balance >= amount", func(in Payload) bool {
-        return in.Balance >= in.Amount
-    }).Do("deduct balance", func(ctx context.Context, in Payload) error {
+    To(Completed).When("balance >= amount", func(payload Payload) bool {
+        return payload.Balance >= payload.Amount
+    }).Do("deduct balance", func(ctx context.Context, payload Payload) error {
         return nil
     }).
-    To(Overdraft).When("overdraftAllowed", func(in Payload) bool {
-        return in.OverdraftAllowed
-    }).Do("apply overdraft fee", func(ctx context.Context, in Payload) error {
+    To(Overdraft).When("overdraftAllowed", func(payload Payload) bool {
+        return payload.OverdraftAllowed
+    }).Do("apply overdraft fee", func(ctx context.Context, payload Payload) error {
         return nil
     }).
-    Otherwise(Rejected).Do("notify rejection", func(ctx context.Context, in Payload) error {
+    Otherwise(Rejected).Do("notify rejection", func(ctx context.Context, payload Payload) error {
         return nil
     }) // unconditional fallback — must be last
 ```
