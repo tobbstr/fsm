@@ -393,6 +393,23 @@ func fsmSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderPayload
     return builder.Build()
 }
 
+// OrderService holds the FSM spec, built once at startup and reused across requests.
+type OrderService struct {
+    db     *sql.DB
+    logger *log.Logger
+    spec   *fsm.Spec[orderState, orderTrigger, OrderPayload]
+}
+
+// NewOrderService builds the FSM spec once, at application startup.
+func NewOrderService(db *sql.DB, logger *log.Logger) *OrderService {
+    services := Services{DB: db, Logger: logger}
+    return &OrderService{
+        db:     db,
+        logger: logger,
+        spec:   fsmSpec(services),
+    }
+}
+
 // Usage in your application service method:
 func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
     order, err := s.loadOrder(ctx, orderID)
@@ -400,10 +417,8 @@ func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
         return fmt.Errorf("loading order: %w", err)
     }
 
-    services := Services{DB: s.db, Logger: s.logger}
-    spec := fsmSpec(services)
-
-    m := fsm.New(spec, stateFromString(order.Status))
+    // Reuse the spec built at startup — no rebuild per call.
+    m := fsm.New(s.spec, stateFromString(order.Status))
 
     // Clean Fire() call — trigger and payload together form the stimuli for the transition.
     // Only business data, no infrastructure dependencies!
