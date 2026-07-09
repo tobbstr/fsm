@@ -601,6 +601,47 @@ err := m.Fire(ctx, Ship, OrderPayload{
 
 This keeps the FSM spec a package-level variable (no rebuild per call) while letting action output flow back to the caller cleanly.
 
+### Running Actions Inside a Database Transaction
+
+When an action needs to participate in a caller-managed DB transaction — so the state transition's side effects commit or roll back atomically with other writes — pass the `*sql.Tx` (or your ORM's transaction handle) **through the payload**:
+
+```go
+type OrderPayload struct {
+    OrderID int
+    Tx      *sql.Tx // caller-managed transaction; actions execute their writes on it
+}
+
+// In the FSM spec:
+builder.From(Paid).On(Ship).To(Shipped).
+    Do("update status", func(ctx context.Context, payload OrderPayload) error {
+        _, err := payload.Tx.ExecContext(ctx, "UPDATE orders SET status = 'shipped' WHERE id = ?", payload.OrderID)
+        return err
+    })
+
+// Call site: caller owns the transaction lifecycle.
+func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
+    tx, err := s.db.BeginTx(ctx, nil)
+    if err != nil {
+        return fmt.Errorf("beginning transaction: %w", err)
+    }
+    defer tx.Rollback() // no-op if committed
+
+    m := fsm.New(s.spec, s.loadState(orderID))
+    if err := m.Fire(ctx, Ship, OrderPayload{OrderID: orderID, Tx: tx}); err != nil {
+        return fmt.Errorf("shipping order: %w", err)
+    }
+
+    // * Do other stuff in the same transaction *
+
+    return tx.Commit()
+}
+```
+
+**Important caveat:** `Fire` mutates the `Machine`'s in-memory state immediately after the winning branch's action returns successfully — this happens *before* your call site commits the transaction. If the commit later fails, the in-memory `Machine` and any `OnEntry`/`OnExit` hook side effects have already run, but the DB row was never updated. Practical implications:
+
+- Treat the `Machine` instance as scoped to the transaction attempt: on commit failure, discard it (and the in-process state change) rather than reusing it.
+- If `OnEntry`/`OnExit` hooks or the action itself perform non-DB side effects (e.g. publishing an event), leverage the outbox pattern — otherwise a rolled-back transaction can leave those side effects applied.
+
 ## Branching: Multiple Guarded Transitions
 
 A single `(from, trigger)` pair can have multiple candidate branches, evaluated in definition order with **first-match-wins** semantics. This replaces the need to try multiple triggers in sequence just to express conditional routing.
