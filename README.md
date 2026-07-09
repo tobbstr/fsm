@@ -654,11 +654,17 @@ Chain `.To(target).When(desc, cond)` for each guarded branch. Use `.Otherwise(ta
 builder.From(Pending).On(Withdraw).
     To(Completed).When("balance >= amount", func(in Payload) bool {
         return in.Balance >= in.Amount
+    }).Do("deduct balance", func(ctx context.Context, in Payload) error {
+        return nil
     }).
     To(Overdraft).When("overdraftAllowed", func(in Payload) bool {
         return in.OverdraftAllowed
+    }).Do("apply overdraft fee", func(ctx context.Context, in Payload) error {
+        return nil
     }).
-    Otherwise(Rejected) // unconditional fallback — must be last
+    Otherwise(Rejected).Do("notify rejection", func(ctx context.Context, in Payload) error {
+        return nil
+    }) // unconditional fallback — must be last
 ```
 
 ### Semantics
