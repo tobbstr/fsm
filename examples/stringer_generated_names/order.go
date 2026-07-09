@@ -15,29 +15,29 @@
 // The generated files (orderstate_string.go, ordertrigger_string.go) are committed to the repo, so anyone
 // building or importing this package never needs stringer installed — only contributors editing the enums do.
 //
-// -trimprefix trims the shared prefix so stateCreated prints as "Created" and triggerPay as "Pay",
-// matching the naming convention the README recommends.
+// stringer derives names directly from the Go identifiers, so states and triggers are named in plain
+// past tense / imperative form (Created, Pay, ...) matching the naming convention the README recommends.
 package stringergeneratednames
 
-//go:generate stringer -type=orderState -trimprefix=state
+//go:generate stringer -type=orderState
 type orderState uint
 
 const (
-	stateCreated orderState = iota // Order has been created
-	statePaid                      // Payment received
-	stateShipped                   // Order shipped to customer
-	stateDelivered                 // Order delivered
-	stateCompleted                 // Order completed successfully
-	stateCancelled                 // Order cancelled
+	Created   orderState = iota // Order has been created
+	Paid                        // Payment received
+	Shipped                     // Order shipped to customer
+	Delivered                   // Order delivered
+	Completed                   // Order completed successfully
+	Cancelled                   // Order cancelled
 )
 
-//go:generate stringer -type=orderTrigger -trimprefix=trigger
+//go:generate stringer -type=orderTrigger
 type orderTrigger uint
 
 const (
-	triggerPay      orderTrigger = iota // Customer pays
-	triggerShip                         // Warehouse ships order
-	triggerDeliver                      // Carrier delivers order
-	triggerComplete                     // Customer confirms completion
-	triggerCancel                       // Order cancelled
+	Pay      orderTrigger = iota // Customer pays
+	Ship                         // Warehouse ships order
+	Deliver                      // Carrier delivers order
+	Complete                     // Customer confirms completion
+	Cancel                       // Order cancelled
 )

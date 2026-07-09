@@ -116,21 +116,21 @@ type orderTrigger uint
 
 // Define states using iota for auto-incrementing values
 const (
-    stateCreated orderState = iota
-    statePaid
-    stateShipped
-    stateDelivered
-    stateCompleted
-    stateCancelled
+    Created orderState = iota
+    Paid
+    Shipped
+    Delivered
+    Completed
+    Cancelled
 )
 
 // Define triggers using iota
 const (
-    triggerPay orderTrigger = iota
-    triggerShip
-    triggerDeliver
-    triggerComplete
-    triggerCancel
+    Pay orderTrigger = iota
+    Ship
+    Deliver
+    Complete
+    Cancel
 )
 ```
 
@@ -141,17 +141,17 @@ Implement the `String()` method to make your states and triggers readable in log
 ```go
 func (s orderState) String() string {
     switch s {
-    case stateCreated:
+    case Created:
         return "Created"
-    case statePaid:
+    case Paid:
         return "Paid"
-    case stateShipped:
+    case Shipped:
         return "Shipped"
-    case stateDelivered:
+    case Delivered:
         return "Delivered"
-    case stateCompleted:
+    case Completed:
         return "Completed"
-    case stateCancelled:
+    case Cancelled:
         return "Cancelled"
     default:
         return fmt.Sprintf("orderState(%d)", s)
@@ -160,15 +160,15 @@ func (s orderState) String() string {
 
 func (t orderTrigger) String() string {
     switch t {
-    case triggerPay:
+    case Pay:
         return "Pay"
-    case triggerShip:
+    case Ship:
         return "Ship"
-    case triggerDeliver:
+    case Deliver:
         return "Deliver"
-    case triggerComplete:
+    case Complete:
         return "Complete"
-    case triggerCancel:
+    case Cancel:
         return "Cancel"
     default:
         return fmt.Sprintf("orderTrigger(%d)", t)
@@ -205,13 +205,12 @@ stateDiagram-v2
 
 ### Best Practices
 
-1. **Use descriptive names** — `stateOrderPlaced` is better than `state1`
-2. **Prefix consistently** — use `state` prefix for states, `trigger` for triggers
-3. **Name states in past tense** — states represent outcomes of events: `stateCompleted`, `stateStarted`, `stateReadied`, `statePaid`, `stateShipped` (not `stateComplete`, `stateStart`, `statePay`)
-4. **Name triggers as commands** — triggers are imperative actions: `triggerStart`, `triggerComplete`, `triggerPay`, `triggerShip` (not `triggerStarting`, `triggerCompletion`)
-5. **Always implement String()** — even for internal states, it helps debugging
-6. **Include default case** — handle unexpected values gracefully in String()
-7. **Document transitions** — add comments showing valid state → trigger → state paths
+1. **Use descriptive names** — `OrderPlaced` is better than `state1`
+2. **Name states in past tense** — states represent outcomes of events: `Completed`, `Started`, `Readied`, `Paid`, `Shipped` (not `Complete`, `Start`, `Pay`)
+3. **Name triggers as commands** — triggers are imperative actions: `Start`, `Complete`, `Pay`, `Ship` (not `Starting`, `Completion`)
+4. **Always implement String()** — even for internal states, it helps debugging
+5. **Include default case** — handle unexpected values gracefully in String()
+6. **Document transitions** — add comments showing valid state → trigger → state paths
 
 **Naming Rationale:**
 - States are facts about what *has happened* (past tense)
@@ -228,27 +227,27 @@ import "fmt"
 type orderState uint
 
 const (
-    stateCreated   orderState = iota // Order has been created
-    statePaid                         // Payment received
-    stateShipped                      // Order shipped to customer
-    stateDelivered                    // Order delivered
-    stateCompleted                    // Order completed successfully
-    stateCancelled                    // Order cancelled
+    Created   orderState = iota // Order has been created
+    Paid                         // Payment received
+    Shipped                      // Order shipped to customer
+    Delivered                    // Order delivered
+    Completed                    // Order completed successfully
+    Cancelled                    // Order cancelled
 )
 
 func (s orderState) String() string {
     switch s {
-    case stateCreated:
+    case Created:
         return "Created"
-    case statePaid:
+    case Paid:
         return "Paid"
-    case stateShipped:
+    case Shipped:
         return "Shipped"
-    case stateDelivered:
+    case Delivered:
         return "Delivered"
-    case stateCompleted:
+    case Completed:
         return "Completed"
-    case stateCancelled:
+    case Cancelled:
         return "Cancelled"
     default:
         return fmt.Sprintf("orderState(%d)", s)
@@ -259,24 +258,24 @@ func (s orderState) String() string {
 type orderTrigger uint
 
 const (
-    triggerPay      orderTrigger = iota // Customer pays
-    triggerShip                          // Warehouse ships order
-    triggerDeliver                       // Carrier delivers order
-    triggerComplete                      // Customer confirms completion
-    triggerCancel                        // Order cancelled
+    Pay      orderTrigger = iota // Customer pays
+    Ship                          // Warehouse ships order
+    Deliver                       // Carrier delivers order
+    Complete                      // Customer confirms completion
+    Cancel                        // Order cancelled
 )
 
 func (t orderTrigger) String() string {
     switch t {
-    case triggerPay:
+    case Pay:
         return "Pay"
-    case triggerShip:
+    case Ship:
         return "Ship"
-    case triggerDeliver:
+    case Deliver:
         return "Deliver"
-    case triggerComplete:
+    case Complete:
         return "Complete"
-    case triggerCancel:
+    case Cancel:
         return "Cancel"
     default:
         return fmt.Sprintf("orderTrigger(%d)", t)
@@ -291,21 +290,21 @@ Writing a `String()` `switch` by hand (as shown above) works, but it is boilerpl
 Annotate each type with a `//go:generate` directive:
 
 ```go
-//go:generate stringer -type=orderState -trimprefix=state
+//go:generate stringer -type=orderState
 type orderState uint
 
 const (
-    stateCreated orderState = iota
-    statePaid
-    stateShipped
+    Created orderState = iota
+    Paid
+    Shipped
 )
 
-//go:generate stringer -type=orderTrigger -trimprefix=trigger
+//go:generate stringer -type=orderTrigger
 type orderTrigger uint
 
 const (
-    triggerPay orderTrigger = iota
-    triggerShip
+    Pay orderTrigger = iota
+    Ship
 )
 ```
 
@@ -319,9 +318,9 @@ go install golang.org/x/tools/cmd/stringer@latest
 go generate ./...
 ```
 
-This produces `orderstate_string.go` / `ordertrigger_string.go` with an efficient `String()` (no runtime cost — the same as a hand-written method). `-trimprefix=state` makes `stateCreated` print as `"Created"`, matching the naming convention recommended above. Commit the generated files so anyone building or importing your package never needs `stringer` installed — only contributors editing the enums do.
+This produces `orderstate_string.go` / `ordertrigger_string.go` with an efficient `String()` (no runtime cost — the same as a hand-written method). Commit the generated files so anyone building or importing your package never needs `stringer` installed — only contributors editing the enums do.
 
-**When to keep the hand-written `switch` instead:** `stringer` derives names from the Go identifiers, so `stateInReview` becomes `"InReview"`, never `"In Review"`. If you need custom display strings (spaces, punctuation, localization) or want zero extra tooling, the manual `switch` shown above remains the better fit.
+**When to keep the hand-written `switch` instead:** `stringer` derives names from the Go identifiers, so `InReview` becomes `"InReview"`, never `"In Review"`. If you need custom display strings (spaces, punctuation, localization) or want zero extra tooling, the manual `switch` shown above remains the better fit.
 
 > **Runnable example:** see [`examples/stringer_generated_names`](./examples/stringer_generated_names) for a complete, tested setup — the annotated `order.go`, the committed generated files, and a test asserting the generated names flow through `Fire` errors and the Mermaid diagram.
 
@@ -343,15 +342,15 @@ import (
 
 type orderState uint
 const (
-    stateCreated orderState = iota
-    statePaid
-    stateShipped
+    Created orderState = iota
+    Paid
+    Shipped
 )
 
 type orderTrigger uint
 const (
-    triggerPay orderTrigger = iota
-    triggerShip
+    Pay orderTrigger = iota
+    Ship
 )
 
 // OrderPayload contains per-transition business data (passed to each Fire call)
@@ -371,7 +370,7 @@ type Services struct {
 func fsmSpec(services Services) *fsm.Spec[orderState, orderTrigger, OrderPayload] {
     builder := fsm.NewBuilder[orderState, orderTrigger, OrderPayload]()
 
-    builder.From(statePaid).On(triggerShip).To(stateShipped).
+    builder.From(Paid).On(Ship).To(Shipped).
         // Conditions are pure boolean functions that check business rules (no side effects!)
         When("status == paid", func(payload OrderPayload) bool {
             return payload.CurrentStatus == "paid"
@@ -408,7 +407,7 @@ func (s *OrderService) ShipOrder(ctx context.Context, orderID int) error {
 
     // Clean Fire() call — trigger and payload together form the stimuli for the transition.
     // Only business data, no infrastructure dependencies!
-    if err := m.Fire(ctx, triggerShip, OrderPayload{
+    if err := m.Fire(ctx, Ship, OrderPayload{
         OrderID:       orderID,
         CustomerID:    order.CustomerID,
         CurrentStatus: order.Status,
@@ -514,13 +513,13 @@ Conditions are **pure boolean functions** that implement business rules. They de
 
 ```go
 // ✅ Good: Pure condition checking only payload data
-builder.From(statePaid).On(triggerShip).To(stateShipped).
+builder.From(Paid).On(Ship).To(Shipped).
     When("inventory available", func(payload OrderPayload) bool {
         return payload.InventoryCount >= payload.OrderQuantity
     })
 
 // ❌ Bad: Condition with side effects (database call)
-builder.From(statePaid).On(triggerShip).To(stateShipped).
+builder.From(Paid).On(Ship).To(Shipped).
     When("inventory check", func(payload OrderPayload) bool {
         // DON'T DO THIS! Conditions should be pure functions
         count, _ := services.DB.QueryInventory(payload.ProductID)
@@ -540,7 +539,7 @@ Actions perform side effects during transitions, such as database updates or ext
 
 ```go
 // Assuming services is captured from outer scope
-builder.From(statePaid).On(triggerShip).To(stateShipped).
+builder.From(Paid).On(Ship).To(Shipped).
     Do("ship order", func(ctx context.Context, payload OrderPayload) error {
         // services.ShippingService is captured via closure
         return services.ShippingService.CreateShipment(ctx, payload.OrderID)
@@ -565,7 +564,7 @@ type ShipResult struct {
 }
 
 // In the FSM spec:
-builder.From(statePaid).On(triggerShip).To(stateShipped).
+builder.From(Paid).On(Ship).To(Shipped).
     Do("create shipment", func(ctx context.Context, payload OrderPayload) error {
         id, err := services.ShippingService.CreateShipment(ctx, payload.OrderID)
         if err != nil {
@@ -577,7 +576,7 @@ builder.From(statePaid).On(triggerShip).To(stateShipped).
 
 // Call site:
 result := &ShipResult{}
-err := m.Fire(ctx, triggerShip, OrderPayload{
+err := m.Fire(ctx, Ship, OrderPayload{
     OrderID:    123,
     CustomerID: "CUST-456",
     Result:     result,
@@ -596,14 +595,14 @@ A single `(from, trigger)` pair can have multiple candidate branches, evaluated 
 Chain `.To(target).When(desc, cond)` for each guarded branch. Use `.Otherwise(target)` as the final unconditional fallback.
 
 ```go
-builder.From(statePending).On(triggerWithdraw).
-    To(stateCompleted).When("balance >= amount", func(in Payload) bool {
+builder.From(Pending).On(Withdraw).
+    To(Completed).When("balance >= amount", func(in Payload) bool {
         return in.Balance >= in.Amount
     }).
-    To(stateOverdraft).When("overdraftAllowed", func(in Payload) bool {
+    To(Overdraft).When("overdraftAllowed", func(in Payload) bool {
         return in.OverdraftAllowed
     }).
-    Otherwise(stateRejected) // unconditional fallback — must be last
+    Otherwise(Rejected) // unconditional fallback — must be last
 ```
 
 ### Semantics
@@ -638,7 +637,7 @@ transition rejected for trigger (Withdraw) from state (Pending): no branch match
 `Explain` reports a full **multi-level decision trace** for what `Fire` would do — without actually firing. It is the recommended tool for debugging, logging, and building diagnostic UIs.
 
 ```go
-decision := machine.Explain(triggerWithdraw, payload)
+decision := machine.Explain(Withdraw, payload)
 
 fmt.Println(decision.Found)        // true if any level had a rule for this trigger
 fmt.Println(decision.Matched)      // true if a branch was selected
@@ -709,7 +708,7 @@ States can have `OnEntry` and `OnExit` hooks that run when entering or leaving a
 
 ```go
 // Assuming services is captured from outer scope
-builder.From(stateShipped).
+builder.From(Shipped).
     WithHooks(fsm.StateHooks[OrderPayload]{
         OnEntry: func(ctx context.Context, payload OrderPayload) error {
             // Called when entering the "shipped" state
@@ -740,8 +739,8 @@ Hierarchical states allow you to model complex state machines with parent-child 
 builder := fsm.NewBuilder[state, trigger, payload]()
 
 // Define parent-child relationships
-builder.From(stateChild).WithParent(stateParent)
-builder.From(stateGrandchild).WithParent(stateChild)
+builder.From(Child).WithParent(Parent)
+builder.From(Grandchild).WithParent(Child)
 ```
 
 ### Trigger Bubbling
@@ -750,13 +749,13 @@ When a trigger is fired from a child state, the FSM automatically searches up th
 
 ```go
 // Define transition only on parent
-builder.From(stateParent).On(triggerX).To(stateOther)
+builder.From(Parent).On(Go).To(Other)
 
 // Create FSM starting in grandchild
-machine := fsm.New(spec, stateGrandchild)
+machine := fsm.New(spec, Grandchild)
 
 // Trigger bubbles up: grandchild -> child -> parent (branch found!)
-machine.Fire(ctx, triggerX, payload) // Successfully transitions to stateOther
+machine.Fire(ctx, Go, payload) // Successfully transitions to Other
 ```
 
 If a child state *has* a slot for the trigger but no branch matches, the FSM still bubbles up to the parent — it only stops at a level that actually selects a branch.
@@ -766,14 +765,14 @@ If a child state *has* a slot for the trigger but no branch matches, the FSM sti
 When transitioning to a state with an initial substate, the FSM automatically enters that substate:
 
 ```go
-builder.From(stateParent).WithInitial(stateDefaultChild)
-builder.From(stateDefaultChild).WithParent(stateParent)
+builder.From(Parent).WithInitial(DefaultChild)
+builder.From(DefaultChild).WithParent(Parent)
 
-builder.From(stateA).On(triggerX).To(stateParent)
+builder.From(A).On(Go).To(Parent)
 
-machine := fsm.New(spec, stateA)
-machine.Fire(ctx, triggerX, payload)
-// Machine is now in stateDefaultChild (not stateParent)
+machine := fsm.New(spec, A)
+machine.Fire(ctx, Go, payload)
+// Machine is now in DefaultChild (not Parent)
 ```
 
 ### Least Common Ancestor (LCA) Optimization
@@ -812,7 +811,7 @@ fmt.Printf("Current state: %v\n", currentState)
 Checks if a transition can be made without actually performing it. Allocation-free — does not call `Explain` internally. Takes no `context.Context`: conditions are pure functions of the payload and no actions run, so there is nothing a context could affect (this mirrors `Explain`).
 
 ```go
-if machine.CanFire(triggerShip, payload) {
+if machine.CanFire(Ship, payload) {
     fmt.Println("Can ship the order")
 } else {
     fmt.Println("Cannot ship the order yet")
@@ -824,8 +823,8 @@ if machine.CanFire(triggerShip, payload) {
 Checks if the FSM is currently in a specific state (including hierarchical checks):
 
 ```go
-if machine.IsIn(stateParent) {
-    // Returns true if current state is stateParent OR any of its descendants
+if machine.IsIn(Parent) {
+    // Returns true if current state is Parent OR any of its descendants
     fmt.Println("FSM is in parent state or one of its children")
 }
 ```
@@ -836,7 +835,7 @@ Returns the complete hierarchy from the current state to the root:
 
 ```go
 hierarchy := machine.ActiveHierarchy()
-// Returns: [stateGrandchild, stateChild, stateParent, stateRoot]
+// Returns: [Grandchild, Child, Parent, Root]
 for _, state := range hierarchy {
     fmt.Printf("Active state: %v\n", state)
 }

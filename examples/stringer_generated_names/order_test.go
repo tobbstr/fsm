@@ -14,10 +14,10 @@ type payload struct{}
 
 func buildSpec() *fsm.Spec[orderState, orderTrigger, payload] {
 	b := fsm.NewBuilder[orderState, orderTrigger, payload]()
-	b.From(stateCreated).On(triggerPay).To(statePaid)
-	b.From(statePaid).On(triggerShip).To(stateShipped)
-	b.From(stateShipped).On(triggerDeliver).To(stateDelivered)
-	b.From(stateDelivered).On(triggerComplete).To(stateCompleted)
+	b.From(Created).On(Pay).To(Paid)
+	b.From(Paid).On(Ship).To(Shipped)
+	b.From(Shipped).On(Deliver).To(Delivered)
+	b.From(Delivered).On(Complete).To(Completed)
 	return b.Build()
 }
 
@@ -25,16 +25,16 @@ func buildSpec() *fsm.Spec[orderState, orderTrigger, payload] {
 // error messages, and Mermaid diagrams human-readable — with no hand-written switch statements.
 func TestGeneratedNamesAreReadable(t *testing.T) {
 	spec := buildSpec()
-	m := fsm.New(spec, stateCreated)
+	m := fsm.New(spec, Created)
 
 	// State() prints the generated name, not a bare integer.
 	require.Equal(t, "Created", m.State().String())
 
-	require.NoError(t, m.Fire(context.Background(), triggerPay, payload{}))
+	require.NoError(t, m.Fire(context.Background(), Pay, payload{}))
 	require.Equal(t, "Paid", m.State().String())
 
 	// An undefined transition surfaces the readable names in the error message.
-	err := m.Fire(context.Background(), triggerComplete, payload{})
+	err := m.Fire(context.Background(), Complete, payload{})
 	require.ErrorIs(t, err, fsm.ErrNotFound)
 	require.Contains(t, err.Error(), "trigger (Complete)")
 	require.Contains(t, err.Error(), "state (Paid)")
